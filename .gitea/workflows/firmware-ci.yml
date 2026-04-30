@@ -1,0 +1,49 @@
+name: Firmware CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  consistency:
+    name: Source consistency
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Arduino IDE and PlatformIO sources must match
+        run: |
+          cmp \
+            "Arduino IDE Files/SwitchBot-BLE2MQTT-ESP32.ino" \
+            "PlatformIO Files/SwitchBot-BLE2MQTT-ESP32/src/SwitchBot-BLE2MQTT-ESP32.cpp"
+
+      - name: No trailing whitespace in firmware files
+        run: |
+          ! grep -RIn --include='*.cpp' --include='*.ino' --include='*.ini' '[[:blank:]]$' .
+
+  platformio-build:
+    name: PlatformIO smoke build
+    runs-on: ubuntu-latest
+    needs: consistency
+    container:
+      image: node:20-bookworm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build prerequisites
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates python3 python3-pip python3-venv
+          rm -rf /var/lib/apt/lists/*
+
+      - name: Install PlatformIO
+        run: |
+          python3 -m venv /tmp/platformio-venv
+          /tmp/platformio-venv/bin/pip install --no-cache-dir platformio
+
+      - name: Build esp32dev firmware
+        working-directory: PlatformIO Files/SwitchBot-BLE2MQTT-ESP32
+        run: /tmp/platformio-venv/bin/pio run -e esp32dev
