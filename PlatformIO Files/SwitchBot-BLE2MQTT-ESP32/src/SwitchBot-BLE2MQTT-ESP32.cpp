@@ -949,6 +949,28 @@ void printAString (int aInt) {
   }
 }
 
+void publishStatus(std::string aTopic, const char * status) {
+  char aBuffer[80];
+  StaticJsonDocument<80> docOut;
+  docOut["status"] = status;
+  serializeJson(docOut, aBuffer, sizeof(aBuffer));
+  addToPublish(aTopic, aBuffer);
+}
+
+bool parseMQTTPayload(JsonDocument & docIn, const char * payload, const char * context) {
+  DeserializationError error = deserializeJson(docIn, payload);
+  if (!error) {
+    return true;
+  }
+
+  printAString("Parsing failed in ");
+  printAString(context);
+  printAString(": ");
+  printAString(error.c_str());
+  publishStatus(ESPMQTTTopic, "errorParsingJSON");
+  return false;
+}
+
 int le16_to_cpu_signed(const uint8_t data[2]) {
   unsigned value = data[0] | ((unsigned)data[1] << 8);
   if (value & 0x8000)
@@ -2818,7 +2840,7 @@ void processAdvData(std::string & deviceMac, long anRSSI,  std::string & aValueS
     if (shouldPublish) {
       if (useActiveScan) {
         delay(50);
-        serializeJson(aJsonDoc, aBuffer);
+        serializeJson(aJsonDoc, aBuffer, sizeof(aBuffer));
         addToPublish(deviceAttrTopic.c_str(), aBuffer, true);
         delay(50);
         addToPublish(deviceStateTopic.c_str(), aState.c_str(), true);
@@ -2911,7 +2933,7 @@ void processAdvData(std::string & deviceMac, long anRSSI,  std::string & aValueS
 
     if (shouldPublish) {
       delay(50);
-      serializeJson(aJsonDoc, aBuffer);
+      serializeJson(aJsonDoc, aBuffer, sizeof(aBuffer));
       addToPublish(deviceAttrTopic.c_str(), aBuffer, true);
       delay(50);
       addToPublish(deviceStateTopic.c_str(), aState.c_str(), true);
@@ -3016,13 +3038,13 @@ void processAdvData(std::string & deviceMac, long anRSSI,  std::string & aValueS
     if (shouldPublish) {
       if (useActiveScan) {
         delay(50);
-        serializeJson(aJsonDoc, aBuffer);
+        serializeJson(aJsonDoc, aBuffer, sizeof(aBuffer));
         addToPublish(deviceAttrTopic.c_str(), aBuffer, true);
         delay(50);
         addToPublish(deviceStateTopic.c_str(), aState.c_str(), true);
         StaticJsonDocument<50> docPos;
         docPos["pos"] = currentPosition;
-        serializeJson(docPos, aBuffer);
+        serializeJson(docPos, aBuffer, sizeof(aBuffer));
         addToPublish(devicePosTopic.c_str(), aBuffer, true);
       }
       lastUpdateTimes[deviceMac] = millis();
@@ -3117,7 +3139,7 @@ void processAdvData(std::string & deviceMac, long anRSSI,  std::string & aValueS
 
     if (shouldPublish) {
       delay(50);
-      serializeJson(aJsonDoc, aBuffer);
+      serializeJson(aJsonDoc, aBuffer, sizeof(aBuffer));
       addToPublish(deviceAttrTopic.c_str(), aBuffer, true);
       delay(50);
       addToPublish(deviceStateTopic.c_str(), aState.c_str(), true);
@@ -5093,7 +5115,7 @@ bool processRequest(std::string macAdd, std::string aName, const char * command,
     char aBuffer[100];
     doc["id"] = aName.c_str();
     doc["status"] = "errorLocatingDevice";
-    serializeJson(doc, aBuffer);
+    serializeJson(doc, aBuffer, sizeof(aBuffer));
     addToPublish((deviceTopic + "/status").c_str(), aBuffer);
   }
   else {
@@ -5588,7 +5610,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
       if (!isSuccess) {
         doc["status"] = "errorRequestInfo";
         doc["command"] = command;
-        serializeJson(doc, aBuffer);
+        serializeJson(doc, aBuffer, sizeof(aBuffer));
         client.publish(deviceStatusTopic.c_str(),  aBuffer);
       }
       return isSuccess;
@@ -5606,7 +5628,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
         shouldContinue = false;
         doc["status"] = "connected";
         doc["command"] = command;
-        serializeJson(doc, aBuffer);
+        serializeJson(doc, aBuffer, sizeof(aBuffer));
         client.publish(deviceStatusTopic.c_str(),  aBuffer);
       }
       else {
@@ -5614,7 +5636,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
           shouldContinue = false;
           doc["status"] = "errorConnect";
           doc["command"] = command;
-          serializeJson(doc, aBuffer);
+          serializeJson(doc, aBuffer, sizeof(aBuffer));
           client.publish(deviceStatusTopic.c_str(),  aBuffer);
         }
       }
@@ -5636,7 +5658,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
             char aBuffer[100];
             doc["status"] = "commandSent";
             doc["command"] = command;
-            serializeJson(doc, aBuffer);
+            serializeJson(doc, aBuffer, sizeof(aBuffer));
             client.publish(deviceStatusTopic.c_str(), aBuffer);
           }
           lastCommandSentPublished = false;
@@ -5670,7 +5692,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
                 StaticJsonDocument<50> docPos;
                 char aBuffer[100];
                 docPos["pos"] = aVal;
-                serializeJson(docPos, aBuffer);
+                serializeJson(docPos, aBuffer, sizeof(aBuffer));
                 addToPublish(devicePosTopic.c_str(), aBuffer);
               }
             }
@@ -5695,7 +5717,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
             shouldContinue = false;
             doc["status"] = "errorCommand";
             doc["command"] = command;
-            serializeJson(doc, aBuffer);
+            serializeJson(doc, aBuffer, sizeof(aBuffer));
             client.publish(deviceStatusTopic.c_str(),  aBuffer);
           }
         }
@@ -5829,7 +5851,7 @@ bool controlMQTT(std::string & device, std::string payload, bool disconnectAfter
         char aBuffer[100];
         StaticJsonDocument<100> docOut;
         docOut["status"] = "errorJSONValue";
-        serializeJson(docOut, aBuffer);
+        serializeJson(docOut, aBuffer, sizeof(aBuffer));
         printAString("Parsing failed = value not a valid command");
         addToPublish(ESPMQTTTopic.c_str(), aBuffer);
       }
@@ -5839,7 +5861,7 @@ bool controlMQTT(std::string & device, std::string payload, bool disconnectAfter
     char aBuffer[100];
     StaticJsonDocument<100> docOut;
     docOut["status"] = "errorJSONDevice";
-    serializeJson(docOut, aBuffer);
+    serializeJson(docOut, aBuffer, sizeof(aBuffer));
     printAString("Parsing failed = device not from list");
     addToPublish(ESPMQTTTopic.c_str(), aBuffer);
   }
@@ -5887,40 +5909,29 @@ void rescanMQTT(std::string & payload) {
   processing = true;
   printAString("Processing Rescan MQTT...");
   StaticJsonDocument<100> docIn;
-  deserializeJson(docIn, payload);
 
-  if (docIn == nullptr) { //Check for errors in parsing
-    printAString("Parsing failed");
-    char aBuffer[100];
-    StaticJsonDocument<100> docOut;
-    docOut["status"] = "errorParsingJSON";
-    serializeJson(docOut, aBuffer);
-    addToPublish(ESPMQTTTopic.c_str(), aBuffer);
+  if (!parseMQTTPayload(docIn, payload.c_str(), "rescanMQTT")) {
+    processing = false;
+    return;
   }
-  else {
-    int value = docIn["sec"];
-    String secString = String(value);
-    if (strlen(secString.c_str()) != 0) {
-      bool isNum = is_number(secString.c_str());
-      if (isNum) {
-        int aVal;
-        sscanf(secString.c_str(), "%d", &aVal);
-        if (aVal < 0) {
-          return;
-        }
-        else if (aVal > 300) {
+
+  int value = docIn["sec"];
+  String secString = String(value);
+  if (strlen(secString.c_str()) != 0) {
+    bool isNum = is_number(secString.c_str());
+    if (isNum) {
+      int aVal;
+      sscanf(secString.c_str(), "%d", &aVal);
+      if (aVal >= 0) {
+        if (aVal > 300) {
           aVal = 300;
         }
         rescan(aVal);
       }
-      else {
-        char aBuffer[100];
-        StaticJsonDocument<100> docOut;
-        docOut["status"] = "errorJSONValue";
-        serializeJson(docOut, aBuffer);
-        printAString("Parsing failed = device not from list");
-        addToPublish(ESPMQTTTopic.c_str(), aBuffer);
-      }
+    }
+    else {
+      publishStatus(ESPMQTTTopic, "errorJSONValue");
+      printAString("Parsing failed = value is not numeric");
     }
   }
   processing = false;
@@ -5930,87 +5941,80 @@ void requestInfoMQTT(std::string & payload) {
   processing = true;
   printAString("Processing Request Info MQTT...");
   StaticJsonDocument<100> docIn;
-  deserializeJson(docIn, payload);
 
-  if (docIn == nullptr) { //Check for errors in parsing
-    printAString("Parsing failed");
-    char aBuffer[100];
-    StaticJsonDocument<100> docOut;
-    docOut["status"] = "errorParsingJSON";
-    serializeJson(docOut, aBuffer);
-    addToPublish(ESPMQTTTopic.c_str(), aBuffer);
+  if (!parseMQTTPayload(docIn, payload.c_str(), "requestInfoMQTT")) {
+    processing = false;
+    return;
+  }
+
+  const char * aName = docIn["id"]; //Get sensor type value
+  if (aName == nullptr) {
+    publishStatus(ESPMQTTTopic, "errorJSONId");
+    processing = false;
+    return;
+  }
+  printAString("Device: ");
+  printAString(aName);
+
+  std::string deviceAddr = "";
+  std::string deviceTopic;
+  std::string anAddr;
+
+  std::map<std::string, std::string>::iterator itS = allBots.find(aName);
+  if (itS != allBots.end())
+  {
+    anAddr = itS->second;
+    std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
+    deviceAddr = anAddr.c_str();
+    deviceTopic = botTopic;
+  }
+  itS = allCurtains.find(aName);
+  if (itS != allCurtains.end())
+  {
+    anAddr = itS->second;
+    std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
+    deviceAddr = anAddr.c_str();
+    deviceTopic = curtainTopic;
+  }
+  itS = allMeters.find(aName);
+  if (itS != allMeters.end())
+  {
+    anAddr = itS->second;
+    std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
+    deviceAddr = anAddr.c_str();
+    deviceTopic = meterTopic;
+  }
+  itS = allContactSensors.find(aName);
+  if (itS != allContactSensors.end())
+  {
+    anAddr = itS->second;
+    std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
+    deviceAddr = anAddr.c_str();
+    deviceTopic = contactTopic;
+  }
+  itS = allMotionSensors.find(aName);
+  if (itS != allMotionSensors.end())
+  {
+    anAddr = itS->second;
+    std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
+    deviceAddr = anAddr.c_str();
+    deviceTopic = motionTopic;
+  }
+  itS = allPlugs.find(aName);
+  if (itS != allPlugs.end())
+  {
+    anAddr = itS->second;
+    std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
+    deviceAddr = anAddr.c_str();
+    deviceTopic = plugTopic;
+  }
+  if (deviceAddr != "") {
+    deviceTopic = deviceTopic + aName;
+    processRequest(deviceAddr, aName, "requestInfo", deviceTopic, true);
   }
   else {
-    const char * aName = docIn["id"]; //Get sensor type value
-    printAString("Device: ");
-    printAString(aName);
-
-    std::string deviceAddr = "";
-    std::string deviceTopic;
-    std::string anAddr;
-
-    if (aName != nullptr) {
-      std::map<std::string, std::string>::iterator itS = allBots.find(aName);
-      if (itS != allBots.end())
-      {
-        anAddr = itS->second;
-        std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
-        deviceAddr = anAddr.c_str();
-        deviceTopic = botTopic;
-      }
-      itS = allCurtains.find(aName);
-      if (itS != allCurtains.end())
-      {
-        anAddr = itS->second;
-        std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
-        deviceAddr = anAddr.c_str();
-        deviceTopic = curtainTopic;
-      }
-      itS = allMeters.find(aName);
-      if (itS != allMeters.end())
-      {
-        anAddr = itS->second;
-        std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
-        deviceAddr = anAddr.c_str();
-        deviceTopic = meterTopic;
-      }
-      itS = allContactSensors.find(aName);
-      if (itS != allContactSensors.end())
-      {
-        anAddr = itS->second;
-        std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
-        deviceAddr = anAddr.c_str();
-        deviceTopic = contactTopic;
-      }
-      itS = allMotionSensors.find(aName);
-      if (itS != allMotionSensors.end())
-      {
-        anAddr = itS->second;
-        std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
-        deviceAddr = anAddr.c_str();
-        deviceTopic = motionTopic;
-      }
-      itS = allPlugs.find(aName);
-      if (itS != allPlugs.end())
-      {
-        anAddr = itS->second;
-        std::transform(anAddr.begin(), anAddr.end(), anAddr.begin(), to_lower());
-        deviceAddr = anAddr.c_str();
-        deviceTopic = plugTopic;
-      }
-    }
-    if (deviceAddr != "") {
-      deviceTopic = deviceTopic + aName;
-      processRequest(deviceAddr, aName, "requestInfo", deviceTopic, true);
-    }
-    else {
-      char aBuffer[100];
-      StaticJsonDocument<100> docOut;
-      docOut["status"] = "errorJSONId";
-      serializeJson(docOut, aBuffer);
-      printAString("Parsing failed = device not from list");
-      addToPublish(ESPMQTTTopic.c_str(), aBuffer);
-    }
+    publishStatus(ESPMQTTTopic, "errorJSONId");
+    printAString("Parsing failed = device not from list");
   }
   processing = false;
 }
@@ -6095,7 +6099,9 @@ void onConnectionEstablished() {
               if (itP != allBots.end())
               {
                 std::string aMac = itP->second.c_str();
-                deserializeJson(docIn, payload.c_str());
+                if (!parseMQTTPayload(docIn, payload.c_str(), "retainedBotSettings")) {
+                  return;
+                }
                 if (docIn.containsKey("firmware")) {
                   printAString("contains firmware");
                   const char * firmware = docIn["firmware"];
@@ -6168,7 +6174,7 @@ void onConnectionEstablished() {
                   StaticJsonDocument<50> docPos;
                   char aBuffer[100];
                   docPos["pos"] = aVal;
-                  serializeJson(docPos, aBuffer);
+                  serializeJson(docPos, aBuffer, sizeof(aBuffer));
                   addToPublish(devicePosTopic.c_str(), aBuffer);
                 }
                 else if ((strcmp(payload.c_str(), "OPEN") == 0))  {
@@ -7612,8 +7618,14 @@ void onConnectionEstablished() {
         printAString("Request Settings MQTT Received...");
         if (!commandQueue.isFull()) {
           StaticJsonDocument<100> docIn;
-          deserializeJson(docIn, payload.c_str());
+          if (!parseMQTTPayload(docIn, payload.c_str(), "requestSettings")) {
+            return;
+          }
           const char * aDevice = docIn["id"];
+          if (aDevice == nullptr) {
+            publishStatus(ESPMQTTTopic, "errorJSONId");
+            return;
+          }
           struct QueueCommand queueCommand;
           queueCommand.payload = "REQUESTSETTINGS";
           queueCommand.topic = ESPMQTTTopic + "/control";
@@ -7634,9 +7646,15 @@ void onConnectionEstablished() {
         printAString("setMode  MQTT Received...");
         if (!commandQueue.isFull()) {
           StaticJsonDocument<100> docIn;
-          deserializeJson(docIn, payload.c_str());
+          if (!parseMQTTPayload(docIn, payload.c_str(), "setMode")) {
+            return;
+          }
           const char * aDevice = docIn["id"];
           const char * aMode = docIn["mode"];
+          if (aDevice == nullptr || aMode == nullptr) {
+            publishStatus(ESPMQTTTopic, "errorJSONId");
+            return;
+          }
           struct QueueCommand queueCommand;
           queueCommand.payload = aMode;
           queueCommand.topic = ESPMQTTTopic + "/control";
@@ -7657,8 +7675,14 @@ void onConnectionEstablished() {
         printAString("setHold MQTT Received...");
         if (!commandQueue.isFull()) {
           StaticJsonDocument<100> docIn;
-          deserializeJson(docIn, payload.c_str());
+          if (!parseMQTTPayload(docIn, payload.c_str(), "setHold")) {
+            return;
+          }
           const char * aDevice = docIn["id"];
+          if (aDevice == nullptr || !docIn.containsKey("hold")) {
+            publishStatus(ESPMQTTTopic, "errorJSONId");
+            return;
+          }
           int aHold = docIn["hold"];
           String holdString = String(aHold);
           struct QueueCommand queueCommand;
@@ -7681,8 +7705,14 @@ void onConnectionEstablished() {
         printAString("holdPress MQTT Received...");
         if (!commandQueue.isFull()) {
           StaticJsonDocument<100> docIn;
-          deserializeJson(docIn, payload.c_str());
+          if (!parseMQTTPayload(docIn, payload.c_str(), "holdPress")) {
+            return;
+          }
           const char * aDevice = docIn["id"];
+          if (aDevice == nullptr || !docIn.containsKey("hold")) {
+            publishStatus(ESPMQTTTopic, "errorJSONId");
+            return;
+          }
           int aHold = docIn["hold"];
           performHoldPress(aDevice, aHold);
         }
@@ -8325,7 +8355,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       StaticJsonDocument<60> statDoc;
       statDoc["status"] = "commandSent";
       statDoc["command"] = aCommand;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
       lastCommandSentPublished = true;
     }
@@ -8357,7 +8387,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       }
       statDoc["value"] = byte1;
       statDoc["command"] = aCommand;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
     }
     if (length == 3) {
@@ -8407,7 +8437,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       }
       statDoc["value"] = byte1;
       statDoc["command"] = aCommand;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
     }
     else if (length == 13) {
@@ -8415,7 +8445,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       statDoc["status"] = "success";
       statDoc["command"] = aCommand;
       lastCommandWasBusy = false;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
 
       /**** THESE SETTINGS ARE ALSO COLLECTED BY A SCAN SO IT IS REDUNDANT. Commented out because of RSSI. The rest works****/
@@ -8453,7 +8483,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
             attDoc["mode"] = aMode;
             attDoc["state"] = aState;
             attDoc["batt"] = battLevel;
-            serializeJson(attDoc, aBuffer);
+            serializeJson(attDoc, aBuffer, sizeof(aBuffer));
             addToPublish(deviceAttrTopic.c_str(), aBuffer, true);
             addToPublish(deviceStateTopic.c_str(), aState.c_str(), true);*/
       /***************************************/
@@ -8467,7 +8497,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       int holdSecs = pData[10];
       settDoc["hold"] = holdSecs;
 
-      serializeJson(settDoc, aBuffer);
+      serializeJson(settDoc, aBuffer, sizeof(aBuffer));
       addToPublish(deviceSettingsTopic.c_str(), aBuffer, true);
 
       botHoldSecs[deviceMac] = holdSecs;
@@ -8486,7 +8516,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       StaticJsonDocument<50> statDoc;
       statDoc["status"] = "commandSent";
       statDoc["command"] = aCommand;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
       lastCommandSentPublished = true;
     }
@@ -8521,7 +8551,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       }
       statDoc["value"] = byte1;
       statDoc["command"] = aCommand;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
     }
   }
@@ -8535,7 +8565,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       StaticJsonDocument<50> statDoc;
       statDoc["status"] = "commandSent";
       statDoc["command"] = aCommand;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
       lastCommandSentPublished = true;
     }
@@ -8565,7 +8595,7 @@ void notifyCB(NimBLERemoteCharacteristic * pRemoteCharacteristic, uint8_t* pData
       }
       statDoc["value"] = byte1;
       statDoc["command"] = aCommand;
-      serializeJson(statDoc, aBuffer);
+      serializeJson(statDoc, aBuffer, sizeof(aBuffer));
       client.publish(deviceStatusTopic.c_str(), aBuffer);
     }
   }
