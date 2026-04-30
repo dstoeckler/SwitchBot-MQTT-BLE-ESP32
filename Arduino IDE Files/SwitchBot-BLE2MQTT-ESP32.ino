@@ -325,6 +325,11 @@
       - <ESPMQTTTopic>
 */
 
+#include <algorithm>
+#include <cctype>
+#include <map>
+#include <string>
+
 #include <NimBLEDevice.h>
 #include <EspMQTTClient.h>
 #include <ArduinoJson.h>
@@ -333,7 +338,6 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <Update.h>
-#include <CRC32.h>
 #include <ArduinoQueue.h>
 
 /****************** CONFIGURATIONS TO CHANGE *******************/
@@ -351,6 +355,13 @@
 static const char* host = "esp32";                                  //  Unique name for ESP32. The name detected by your router and MQTT. If you are using more then 1 ESPs to control different switchbots be sure to use unique hostnames. Host is the MQTT Client name and is used in MQTT topics
 static const char* ssid = "SSID";                                   //  WIFI SSID
 static const char* password = "Password";                           //  WIFI Password
+static const bool useStaticIP = false;                              //  Set true to use the fixed network settings below instead of DHCP
+static const bool disableWiFiSleep = true;                          //  Keep WiFi awake to reduce MQTT/Home Assistant availability flapping
+static IPAddress staticIP(192, 168, 0, 50);                         //  ESP32 fixed IP when useStaticIP = true
+static IPAddress staticGateway(192, 168, 0, 1);                     //  Network gateway when useStaticIP = true
+static IPAddress staticSubnet(255, 255, 255, 0);                    //  Network subnet when useStaticIP = true
+static IPAddress staticPrimaryDNS(192, 168, 0, 1);                  //  Primary DNS when useStaticIP = true
+static IPAddress staticSecondaryDNS(8, 8, 8, 8);                    //  Secondary DNS when useStaticIP = true
 
 /* MQTT Settings */
 /* MQTT Client name is set to WIFI host from Wifi Settings*/
@@ -448,6 +459,12 @@ static std::map<std::string, std::string> allBotTypes = {     // OPTIONAL - (DEF
             /*{ "switchbotone", 15 },
               { "switchbottwo", 1}*/
           };
+
+          // Add bots to be controlled using the ESP32 BOOT button (GPIO0). Leave empty to disable.
+          static std::map<std::string, bool> botsControlledByESPButton = {
+            /*{ "switchbotone", true },
+              { "switchbottwo", true }*/
+          };
 /********************************************/
 
 
@@ -460,6 +477,7 @@ static std::map<std::string, std::string> allBotTypes = {     // OPTIONAL - (DEF
 	#define LED_BUILTIN 2                            // If your board doesn't have a defined LED_BUILTIN, replace 2 with the LED pin value
 #endif
 static const bool ledHighEqualsON = true;            // ESP32 board LED ON=HIGH (Default). If your ESP32 LED is turning OFF on scanning and turning ON while IDLE, then set this value to false
+static const bool ledOnESPButtonPress = true;        // Turn on LED while the ESP32 BOOT button is processing configured bot commands
 static const bool ledOnBootScan = true;              // Turn on LED during initial boot scan
 static const bool ledOnScan = true;                  // Turn on LED while scanning (non-boot)
 static const bool ledOnCommand = true;               // Turn on LED while MQTT command is processing. If scanning, LED will blink after scan completes. You may not notice it, there is no delay after scan
@@ -475,6 +493,13 @@ static const bool home_assistant_mqtt_discovery = true;                    // En
 static const std::string home_assistant_mqtt_prefix = "homeassistant";     // MQTT Home Assistant prefix
 static const bool home_assistant_expose_seperate_curtain_position = true;  // When enabled, a seperate sensor will be added that will expose the curtain position. This is useful when using the Prometheus integration to graph curtain positions. The cover entity doesn't expose the position for Prometheus
 static const bool home_assistant_use_opt_mode = false;                     // For bots in switch mode assume on/off right away. Optimistic mode. (Icon will change in HA). If devices were already configured in HA, you need to delete them and reboot esp32
+static const bool home_assistant_entity_names_include_device_name = false;  // false uses modern HA device-grouped names like "Battery" instead of "<device> Battery"
+
+/* ESP32 General Settings */
+static const bool includeSensorRecentFailures = true;                      // Include an MQTT sensor counting recent commands sent without receiving a valid response
+static const bool includeSensorSystemInfo = true;                          // Include an MQTT sensor for ESP32 system status updates
+static const int systemInfoTime = 60;                                      // How often to publish ESP32 system status updates in seconds
+static const bool includeInfoBtMAC = false;                                // Include the ESP32 Bluetooth MAC in system info attributes
 
 /* Switchbot General Settings */
 static const int tryConnecting = 60;                         // How many times to try connecting to bot
@@ -679,6 +704,11 @@ void startForeverScan();
 void recurringMeterScan();
 uint32_t getPassCRC(std::string & aDevice);
 bool is_number(const std::string & s);
+std::string haEntityName(std::string deviceName, const char * entityName);
+std::string haESPName(const char * entityName);
+void deviceInfoPolling();
+void pushBotButtons();
+void publishRecentFailures(bool commandNoResponse, int currentTry);
 bool controlMQTT(std::string & device, std::string payload, bool disconnectAfter);
 bool sendCommand(NimBLEAdvertisedDevice * advDeviceToUse, const char * type, int attempts, bool disconnectAfter);
 bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const char * command, std::string & deviceTopic, bool disconnectAfter);
@@ -771,8 +801,10 @@ static std::map<std::string, bool> botInverteds = {};
 static std::map<std::string, unsigned long> lastCommandSent = {};
 static std::map<std::string, std::string> deviceTypes;
 static NimBLEScan* pScan;
+static std::string bluetooth_mac_address = "";
 static bool isRescanning = false;
 static bool processing = false;
+static bool espButtonPressed = false;
 static bool initialScanComplete = false;
 static bool lastCommandWasBusy = false;
 static bool deviceHasBooted = false;
@@ -870,7 +902,7 @@ void addToPublish(std::string aTopic, std::string aPayload, bool retain) {
   }
 }
 
-void addToPublish(std::string aTopic, char * aPayload, bool retain) {
+void addToPublish(std::string aTopic, const char * aPayload, bool retain) {
   bool queueIsFull = publishQueue.isFull();
   if (!queueIsFull) {
     struct QueuePublish aPublish;
@@ -914,7 +946,7 @@ void addToPublish(std::string aTopic, std::string aPayload) {
   }
 }
 
-void addToPublish(std::string aTopic, char * aPayload) {
+void addToPublish(std::string aTopic, const char * aPayload) {
   bool queueIsFull = publishQueue.isFull();
   if (!queueIsFull) {
     struct QueuePublish aPublish;
@@ -969,6 +1001,33 @@ bool parseMQTTPayload(JsonDocument & docIn, const char * payload, const char * c
   printAString(error.c_str());
   publishStatus(ESPMQTTTopic, "errorParsingJSON");
   return false;
+}
+
+std::string haEntityName(std::string deviceName, const char * entityName) {
+  if (home_assistant_entity_names_include_device_name) {
+    return deviceName + " " + std::string(entityName);
+  }
+  return std::string(entityName);
+}
+
+std::string haESPName(const char * entityName) {
+  if (home_assistant_entity_names_include_device_name) {
+    return std::string(host) + " " + std::string(entityName);
+  }
+  return std::string(entityName);
+}
+
+void publishRecentFailures(bool commandNoResponse, int currentTry) {
+  if (!includeSensorRecentFailures) {
+    return;
+  }
+
+  if (commandNoResponse) {
+    addToPublish((esp32Topic + "/recentFailures").c_str(), currentTry, true);
+  }
+  else {
+    addToPublish((esp32Topic + "/recentFailures").c_str(), "0", true);
+  }
 }
 
 int le16_to_cpu_signed(const uint8_t data[2]) {
@@ -2466,6 +2525,7 @@ void processMeterRSSI(std::string & aDevice, std::string & deviceMac, long anRSS
 }
 
 static unsigned long lastOnlinePublished = 0;
+static unsigned long lastSystemInfoPoll = 0;
 static unsigned long lastRescan = 0;
 static unsigned long lastScanCheck = 0;
 static bool noResponse = false;
@@ -3172,21 +3232,43 @@ void publishLastwillOnline() {
 void publishHomeAssistantDiscoveryESPConfig() {
   String wifiMAC = String(WiFi.macAddress());
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + host + "/linkquality/config").c_str(), ("{\"~\":\"" + esp32Topic + "\"," +
-               + "\"name\":\"" + host + " Linkquality\"," +
+               + "\"name\":\"" + haESPName("Linkquality") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + "ESP32" + "\",\"name\": \"" + host + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "_linkquality\"," +
                + "\"stat_t\":\"~/rssi\"," +
                + "\"icon\":\"mdi:signal\"," +
-               + "\"unit_of_meas\": \"rssi\"}").c_str(), true);
+               + "\"unit_of_meas\": \"dBm\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + host + "/firmware/config").c_str(), ("{\"~\":\"" + esp32Topic + "\"," +
-               + "\"name\":\"" + host + " Firmware\"," +
+               + "\"name\":\"" + haESPName("Firmware") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + "ESP32" + "\",\"name\": \"" + host + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "_firmware\"," +
                + "\"icon\":\"mdi:cog\"," +
                + "\"stat_t\":\"~/firmware\"}").c_str(), true);
+
+  if (includeSensorRecentFailures) {
+    addToPublish((home_assistant_mqtt_prefix + "/sensor/" + host + "/recentFailures/config").c_str(), ("{\"~\":\"" + esp32Topic + "\"," +
+                 + "\"name\":\"" + haESPName("Recent Failures") + "\"," +
+                 + "\"device\": {\"identifiers\":[\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + "ESP32" + "\",\"name\": \"" + host + "\" }," +
+                 + "\"avty_t\": \"" + lastWill + "\"," +
+                 + "\"uniq_id\":\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "_recentfailures\"," +
+                 + "\"icon\":\"mdi:alert\"," +
+                 + "\"stat_t\":\"~/recentFailures\"}").c_str(), true);
+  }
+
+  if (includeSensorSystemInfo) {
+    addToPublish((home_assistant_mqtt_prefix + "/sensor/" + host + "/systemUptime/config").c_str(), ("{\"~\":\"" + esp32Topic + "\"," +
+                 + "\"name\":\"" + haESPName("System Uptime") + "\"," +
+                 + "\"device\": {\"identifiers\":[\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + "ESP32" + "\",\"name\": \"" + host + "\" }," +
+                 + "\"avty_t\": \"" + lastWill + "\"," +
+                 + "\"uniq_id\":\"switchbotesp_" + host + "_" + wifiMAC.c_str() + "_systemuptime\"," +
+                 + "\"icon\":\"mdi:timer-outline\"," +
+                 + "\"stat_t\":\"~/systemUptime/state\"," +
+                 + "\"json_attr_t\":\"~/systemUptime/json_attr\"," +
+                 + "\"unit_of_meas\": \"h\"}").c_str(), true);
+  }
 }
 
 
@@ -3194,12 +3276,12 @@ void publishHomeAssistantDiscoveryPlugConfig(std::string & deviceName, std::stri
   std::transform(deviceMac.begin(), deviceMac.end(), deviceMac.begin(), ::toupper);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/linkquality/config").c_str(), ("{\"~\":\"" + (plugTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Linkquality\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Linkquality") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + plugModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_linkquality\"," +
                + "\"icon\":\"mdi:signal\"," +
-               + "\"unit_of_meas\": \"rssi\", " +
+               + "\"unit_of_meas\": \"dBm\", " +
                + "\"stat_t\":\"~/rssi\"}").c_str(), true);
 
   std::string optiString;
@@ -3211,7 +3293,7 @@ void publishHomeAssistantDiscoveryPlugConfig(std::string & deviceName, std::stri
   }
 
   addToPublish((home_assistant_mqtt_prefix + "/switch/" + deviceName + "/config").c_str(), ("{\"~\":\"" + (plugTopic + deviceName) + "\", " +
-               + "\"name\":\"" + deviceName + " Switch\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Switch") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + plugModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "\", " +
@@ -3220,7 +3302,7 @@ void publishHomeAssistantDiscoveryPlugConfig(std::string & deviceName, std::stri
                + "\"cmd_t\": \"~/set\" }").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/energy/config").c_str(), ("{\"~\":\"" + (plugTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Energy\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Energy") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + plugModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_energy\"," +
@@ -3230,7 +3312,7 @@ void publishHomeAssistantDiscoveryPlugConfig(std::string & deviceName, std::stri
                + "\"stat_t\":\"~/energy\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/overload/config").c_str(), ("{\"~\":\"" + (plugTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Overload\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Overload") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + plugModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_overload\"," +
@@ -3245,7 +3327,7 @@ void publishHomeAssistantDiscoveryPlugConfig(std::string & deviceName, std::stri
 void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::string deviceMac, bool optimistic) {
   std::transform(deviceMac.begin(), deviceMac.end(), deviceMac.begin(), ::toupper);
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/battery/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Battery\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Battery") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_battery\"," +
@@ -3254,16 +3336,16 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
                + "\"stat_t\":\"~/battery\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/linkquality/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Linkquality\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Linkquality") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_linkquality\"," +
                + "\"icon\":\"mdi:signal\"," +
-               + "\"unit_of_meas\": \"rssi\", " +
+               + "\"unit_of_meas\": \"dBm\", " +
                + "\"stat_t\":\"~/rssi\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/inverted/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Inverted\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Inverted") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "inverted\"," +
@@ -3274,7 +3356,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
                + "\"value_template\":\"{{ value_json.inverted }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/mode/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Mode\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Mode") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_mode\"," +
@@ -3283,7 +3365,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
                + "\"value_template\":\"{{ value_json.mode }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/firmware/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Firmware\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Firmware") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_firmware\"," +
@@ -3292,7 +3374,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
                + "\"value_template\":\"{{ value_json.firmware }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/holdsecs/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " HoldSecs\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "HoldSecs") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_holdsecs\"," +
@@ -3301,7 +3383,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
                + "\"value_template\":\"{{ value_json.hold }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/timers/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Timers\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Timers") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_timers\"," +
@@ -3333,7 +3415,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
 
   if (strcmp(aType.c_str(), "light") == 0) {
     addToPublish((home_assistant_mqtt_prefix + "/light/" + deviceName + "/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\", " +
-                 + "\"name\":\"" + deviceName + " Light\"," +
+                 + "\"name\":\"" + haEntityName(deviceName, "Light") + "\"," +
                  + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                  + "\"avty_t\": \"" + lastWill + "\"," +
                  + "\"uniq_id\":\"switchbot_" + deviceMac + "\", " +
@@ -3343,7 +3425,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
   }
   else if (strcmp(aType.c_str(), "button") == 0) {
     addToPublish((home_assistant_mqtt_prefix + "/button/" + deviceName + "/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\", " +
-                 + "\"name\":\"" + deviceName + " Button\"," +
+                 + "\"name\":\"" + haEntityName(deviceName, "Button") + "\"," +
                  + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                  + "\"avty_t\": \"" + lastWill + "\"," +
                  + "\"uniq_id\":\"switchbot_" + deviceMac + "\", " +
@@ -3351,7 +3433,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
   }
   else {
     addToPublish((home_assistant_mqtt_prefix + "/switch/" + deviceName + "/config").c_str(), ("{\"~\":\"" + (botTopic + deviceName) + "\", " +
-                 + "\"name\":\"" + deviceName + " Switch\"," +
+                 + "\"name\":\"" + haEntityName(deviceName, "Switch") + "\"," +
                  + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + botModel + "\",\"name\": \"" + deviceName + "\" }," +
                  + "\"avty_t\": \"" + lastWill + "\"," +
                  + "\"uniq_id\":\"switchbot_" + deviceMac + "\", " +
@@ -3364,7 +3446,7 @@ void publishHomeAssistantDiscoveryBotConfig(std::string & deviceName, std::strin
 void publishHomeAssistantDiscoveryCurtainConfig(std::string & deviceName, std::string deviceMac) {
   std::transform(deviceMac.begin(), deviceMac.end(), deviceMac.begin(), ::toupper);
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/battery/config").c_str(), ("{\"~\":\"" + (curtainTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Battery\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Battery") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + curtainModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_battery\"," +
@@ -3373,16 +3455,16 @@ void publishHomeAssistantDiscoveryCurtainConfig(std::string & deviceName, std::s
                + "\"stat_t\":\"~/battery\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/linkquality/config").c_str(), ("{\"~\":\"" + (curtainTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Linkquality\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Linkquality") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + curtainModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_linkquality\"," +
                + "\"icon\":\"mdi:signal\"," +
-               + "\"unit_of_meas\": \"rssi\", " +
+               + "\"unit_of_meas\": \"dBm\", " +
                + "\"stat_t\":\"~/rssi\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/illuminance/config").c_str(), ("{\"~\":\"" + (curtainTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Illuminance\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Illuminance") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + curtainModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_illuminance\"," +
@@ -3392,7 +3474,7 @@ void publishHomeAssistantDiscoveryCurtainConfig(std::string & deviceName, std::s
                + "\"value_template\":\"{{ value_json.light }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/calibrated/config").c_str(), ("{\"~\":\"" + (curtainTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Calibrated\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Calibrated") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + curtainModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_calibrated\"," +
@@ -3403,7 +3485,7 @@ void publishHomeAssistantDiscoveryCurtainConfig(std::string & deviceName, std::s
                + "\"value_template\":\"{{ value_json.calib }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/cover/" + deviceName + "/config").c_str(), ("{\"~\":\"" + (curtainTopic + deviceName) + "\", " +
-               + "\"name\":\"" + deviceName + " Curtain\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Curtain") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + curtainModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "\", " +
@@ -3422,7 +3504,7 @@ void publishHomeAssistantDiscoveryCurtainConfig(std::string & deviceName, std::s
                + "\"set_pos_tpl\": \"{{ position }}\" }").c_str(), true);
   if (home_assistant_expose_seperate_curtain_position) {
     addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/position/config").c_str(), ("{\"~\":\"" + (curtainTopic + deviceName) + "\"," +
-                 + "\"name\":\"" + deviceName + " Position\"," +
+                 + "\"name\":\"" + haEntityName(deviceName, "Position") + "\"," +
                  + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + curtainModel + "\",\"name\": \"" + deviceName + "\" }," +
                  + "\"avty_t\": \"" + lastWill + "\"," +
                  + "\"uniq_id\":\"switchbot_" + deviceMac + "_position\"," +
@@ -3442,7 +3524,7 @@ void publishHomeAssistantDiscoveryMeterConfig(std::string & deviceName, std::str
 
   std::transform(deviceMac.begin(), deviceMac.end(), deviceMac.begin(), ::toupper);
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/battery/config").c_str(), ("{\"~\":\"" + (meterTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Battery\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Battery") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + meterModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_battery\"," +
@@ -3451,16 +3533,16 @@ void publishHomeAssistantDiscoveryMeterConfig(std::string & deviceName, std::str
                + "\"stat_t\":\"~/battery\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/linkquality/config").c_str(), ("{\"~\":\"" + (meterTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Linkquality\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Linkquality") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + meterModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_linkquality\"," +
                + "\"icon\":\"mdi:signal\"," +
-               + "\"unit_of_meas\": \"rssi\", " +
+               + "\"unit_of_meas\": \"dBm\", " +
                + "\"stat_t\":\"~/rssi\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/temperature/config").c_str(), ("{\"~\":\"" + (meterTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Temperature\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Temperature") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + meterModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_temperature\"," +
@@ -3470,7 +3552,7 @@ void publishHomeAssistantDiscoveryMeterConfig(std::string & deviceName, std::str
                + "\"value_template\":\"{{ value_json.C }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/humidity/config").c_str(), ("{\"~\":\"" + (meterTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Humidity\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Humidity") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + meterModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_humidity\"," +
@@ -3491,7 +3573,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
 
   std::transform(deviceMac.begin(), deviceMac.end(), deviceMac.begin(), ::toupper);
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/battery/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Battery\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Battery") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_battery\"," +
@@ -3500,16 +3582,16 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"stat_t\":\"~/battery\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/linkquality/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Linkquality\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Linkquality") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_linkquality\"," +
                + "\"icon\":\"mdi:signal\"," +
-               + "\"unit_of_meas\": \"rssi\", " +
+               + "\"unit_of_meas\": \"dBm\", " +
                + "\"stat_t\":\"~/rssi\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/contact/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Contact\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Contact") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_contact\"," +
@@ -3517,7 +3599,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"stat_t\":\"~/contact\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/motion/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Motion\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Motion") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_motion\"," +
@@ -3527,7 +3609,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"pl_off\":\"NO MOTION\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/bincontact/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " BinaryContact\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "BinaryContact") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_bincontact\"," +
@@ -3537,7 +3619,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"pl_off\":\"CLOSED\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/in/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " In\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "In") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_in\"," +
@@ -3547,7 +3629,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"pl_off\":\"IDLE\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/out/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Out\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Out") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_out\"," +
@@ -3557,7 +3639,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"pl_off\":\"IDLE\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/button/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Button\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Button") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_button\"," +
@@ -3567,7 +3649,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"pl_off\":\"IDLE\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/illuminance/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Illuminance\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Illuminance") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "__illuminance\"," +
@@ -3577,7 +3659,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"pl_off\":\"DARK\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/lastmotion/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " LastMotion\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "LastMotion") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_lastmotion\"," +
@@ -3586,7 +3668,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"value_template\":\"{{ now() - timedelta(seconds = (value | int)) }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/lastcontact/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " LastContact\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "LastContact") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_lastcontact\"," +
@@ -3595,7 +3677,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"value_template\":\"{{ now() - timedelta(seconds = (value | int)) }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/buttoncount/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " ButtonCount\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "ButtonCount") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_buttoncount\"," +
@@ -3603,7 +3685,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"stat_t\":\"~/buttoncount\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/incount/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " InCount\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "InCount") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_entrancecount\"," +
@@ -3611,7 +3693,7 @@ void publishHomeAssistantDiscoveryContactConfig(std::string & deviceName, std::s
                + "\"stat_t\":\"~/incount\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/outcount/config").c_str(), ("{\"~\":\"" + (contactTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " OutCount\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "OutCount") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + contactModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_outcount\"," +
@@ -3629,7 +3711,7 @@ void publishHomeAssistantDiscoveryMotionConfig(std::string & deviceName, std::st
 
   std::transform(deviceMac.begin(), deviceMac.end(), deviceMac.begin(), ::toupper);
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/battery/config").c_str(), ("{\"~\":\"" + (motionTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Battery\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Battery") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + motionModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_battery\"," +
@@ -3638,16 +3720,16 @@ void publishHomeAssistantDiscoveryMotionConfig(std::string & deviceName, std::st
                + "\"stat_t\":\"~/battery\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/linkquality/config").c_str(), ("{\"~\":\"" + (motionTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Linkquality\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Linkquality") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + motionModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_linkquality\"," +
                + "\"icon\":\"mdi:signal\"," +
-               + "\"unit_of_meas\": \"rssi\", " +
+               + "\"unit_of_meas\": \"dBm\", " +
                + "\"stat_t\":\"~/rssi\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/motion/config").c_str(), ("{\"~\":\"" + (motionTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Motion\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Motion") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + motionModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_motion\"," +
@@ -3657,7 +3739,7 @@ void publishHomeAssistantDiscoveryMotionConfig(std::string & deviceName, std::st
                + "\"pl_off\":\"NO MOTION\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/illuminance/config").c_str(), ("{\"~\":\"" + (motionTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " Illuminance\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Illuminance") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + motionModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_illuminance\"," +
@@ -3667,7 +3749,7 @@ void publishHomeAssistantDiscoveryMotionConfig(std::string & deviceName, std::st
                + "\"pl_off\":\"DARK\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/binary_sensor/" + deviceName + "/led/config").c_str(), ("{\"~\":\"" + (motionTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " LED\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "LED") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + motionModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_led\"," +
@@ -3677,7 +3759,7 @@ void publishHomeAssistantDiscoveryMotionConfig(std::string & deviceName, std::st
                + "\"stat_t\":\"~/led\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/lastmotion/config").c_str(), ("{\"~\":\"" + (motionTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " LastMotion\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "LastMotion") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + motionModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_lastmotion\"," +
@@ -3686,7 +3768,7 @@ void publishHomeAssistantDiscoveryMotionConfig(std::string & deviceName, std::st
                + "\"value_template\":\"{{ now() - timedelta(seconds = (value | int)) }}\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/sensedistance/config").c_str(), ("{\"~\":\"" + (motionTopic + deviceName) + "\"," +
-               + "\"name\":\"" + deviceName + " SenseDistance\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "SenseDistance") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + motionModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWillToUse + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_sensedistance\"," +
@@ -4246,13 +4328,20 @@ std::string getPass(std::string aDevice) {
 
 uint32_t getPassCRC(std::string & aDevice) {
   const uint8_t * byteBuffer = (const unsigned char *)(aDevice.c_str());
-  CRC32 crc;
+  uint32_t crc = 0xFFFFFFFF;
   for (size_t i = 0; i < aDevice.length(); i++)
   {
-    crc.update(byteBuffer[i]);
+    crc ^= byteBuffer[i];
+    for (uint8_t bit = 0; bit < 8; bit++) {
+      if (crc & 1) {
+        crc = (crc >> 1) ^ 0xEDB88320;
+      }
+      else {
+        crc >>= 1;
+      }
+    }
   }
-  uint32_t checksum = crc.finalize();
-  return checksum;
+  return ~crc;
 }
 
 static ClientCallbacks clientCB;
@@ -4286,8 +4375,15 @@ void setup () {
 
   forceRescan = false;
   pinMode (LED_BUILTIN, OUTPUT);
+  pinMode(0, INPUT_PULLUP);
   Serial.begin(115200);
   // Connect to WiFi network
+  if (disableWiFiSleep) {
+    WiFi.setSleep(false);
+  }
+  if (useStaticIP) {
+    WiFi.config(staticIP, staticGateway, staticSubnet, staticPrimaryDNS, staticSecondaryDNS);
+  }
   WiFi.begin(ssid, password);
   printAString("");
 
@@ -4381,6 +4477,7 @@ void setup () {
   static std::map<std::string, int> botsSimulatedOFFHoldTimesTemp = {};
   static std::map<std::string, int> botsSimulatedONHoldTimesTemp = {};
   NimBLEDevice::init("");
+  bluetooth_mac_address = NimBLEDevice::getAddress().toString();
 
   std::map<std::string, std::string>::iterator it = allBots.begin();
   std::string anAddr;
@@ -4705,6 +4802,61 @@ void getAllBotSettings() {
   }
 }
 
+void pushBotButtons() {
+  if (espButtonPressed || botsControlledByESPButton.empty()) {
+    return;
+  }
+  espButtonPressed = true;
+  printAString("START pushBotButtons");
+
+  if (ledOnESPButtonPress) {
+    digitalWrite(LED_BUILTIN, ledONValue);
+  }
+
+  if (client.isConnected() && initialScanComplete) {
+    std::map<std::string, bool>::iterator itT = botsControlledByESPButton.begin();
+    while (itT != botsControlledByESPButton.end())
+    {
+      std::string aDevice = itT->first;
+      std::replace(aDevice.begin(), aDevice.end(), ' ', '_');
+      bool shouldCtrl = itT->second;
+      std::map<std::string, std::string>::iterator itN = allBots.find(aDevice);
+      if (shouldCtrl && itN != allBots.end() && !commandQueue.isFull()) {
+        std::string anAddr = itN->second;
+        std::map<std::string, bool>::iterator itP = botsInPressMode.find(anAddr);
+        if (itP != botsInPressMode.end()) {
+          std::string cmdPayload = "PRESS";
+          std::map<std::string, bool>::iterator itE = botsSimulateONOFFinPRESSmode.find(aDevice);
+          if (itE != botsSimulateONOFFinPRESSmode.end()) {
+            std::map<std::string, bool>::iterator itF = botsSimulatedStates.find(aDevice);
+            if (itF != botsSimulatedStates.end()) {
+              cmdPayload = itF->second ? "OFF" : "ON";
+            }
+          }
+
+          struct QueueCommand queueCommand;
+          queueCommand.payload = cmdPayload;
+          queueCommand.topic = ESPMQTTTopic + "/control";
+          queueCommand.device = aDevice;
+          queueCommand.disconnectAfter = true;
+          queueCommand.priority = false;
+          queueCommand.currentTry = 1;
+          commandQueue.enqueue(queueCommand);
+        }
+      }
+      itT++;
+    }
+  }
+
+  delay(500);
+  if (ledOnESPButtonPress) {
+    digitalWrite(LED_BUILTIN, ledOFFValue);
+  }
+
+  printAString("END pushBotButtons");
+  espButtonPressed = false;
+}
+
 unsigned long retainStartTime = 0;
 bool waitForRetained = true;
 unsigned long lastWebServerReboot = 0;
@@ -4757,8 +4909,14 @@ void loop () {
   }
 
   if (initialScanComplete && client.isConnected() && !manualDebugStartESP32WithMQTT) {
+    if (includeSensorSystemInfo) {
+      deviceInfoPolling();
+    }
     if (isRescanning) {
       lastRescan = millis();
+    }
+    if (!processing && !espButtonPressed && digitalRead(0) == LOW) {
+      pushBotButtons();
     }
     if ((!waitForResponse) && (!processing) && (!(pScan->isScanning())) && (!isRescanning)) {
       if (getSettingsOnBoot && !gotSettings ) {
@@ -4795,6 +4953,26 @@ void loop () {
     }
   }
   //printAString("END loop...");
+}
+
+void deviceInfoPolling() {
+  if (lastSystemInfoPoll == 0 || ((millis() - lastSystemInfoPoll) >= ((unsigned long)systemInfoTime * 1000UL))) {
+    lastSystemInfoPoll = millis();
+
+    float uptimeHours = (millis() / 1000.0) / 3600.0;
+    addToPublish((esp32Topic + "/systemUptime/state").c_str(), String(uptimeHours, 2).c_str(), true);
+
+    StaticJsonDocument<160> doc;
+    char aBuffer[160];
+    doc["uptime_ms"] = millis();
+    doc["free_heap"] = ESP.getFreeHeap();
+    doc["wifi_rssi"] = WiFi.RSSI();
+    if (includeInfoBtMAC) {
+      doc["bluetooth_mac_address"] = bluetooth_mac_address;
+    }
+    serializeJson(doc, aBuffer, sizeof(aBuffer));
+    addToPublish((esp32Topic + "/systemUptime/json_attr").c_str(), aBuffer, true);
+  }
 }
 
 void recurringRescan() {
@@ -5399,6 +5577,7 @@ bool processQueue() {
                     botsToWaitFor.erase(aCommand.device);
                   }
                 }
+                publishRecentFailures(noResponse, aCommand.currentTry);
                 waitForResponse = false;
                 noResponse = false;
               }
@@ -5459,6 +5638,7 @@ bool processQueue() {
                     botsToWaitFor.erase(aCommand.device);
                   }
                 }
+                publishRecentFailures(noResponse, aCommand.currentTry);
                 waitForResponse = false;
                 noResponse = false;
               }
@@ -5514,6 +5694,7 @@ bool processQueue() {
                   }
                 }
 
+                publishRecentFailures(noResponse, aCommand.currentTry);
                 waitForResponse = false;
                 noResponse = false;
               }
@@ -5822,6 +6003,22 @@ bool controlMQTT(std::string & device, std::string payload, bool disconnectAfter
 
 
     String tempPayload = payload.c_str();
+    StaticJsonDocument<200> payloadDoc;
+    DeserializationError payloadError = deserializeJson(payloadDoc, tempPayload);
+    if (!payloadError) {
+      if (payloadDoc.containsKey("position")) {
+        tempPayload = payloadDoc["position"].as<String>();
+      }
+      else if (payloadDoc.containsKey("pos")) {
+        tempPayload = payloadDoc["pos"].as<String>();
+      }
+      else if (payloadDoc.containsKey("level")) {
+        tempPayload = payloadDoc["level"].as<String>();
+      }
+      else if (payloadDoc.containsKey("switchcmd")) {
+        tempPayload = payloadDoc["switchcmd"].as<String>();
+      }
+    }
     int dotIndex = tempPayload.indexOf(".");
     if (dotIndex >= 0) {
       tempPayload.remove(dotIndex, tempPayload.length() - 1);
@@ -5842,6 +6039,8 @@ bool controlMQTT(std::string & device, std::string payload, bool disconnectAfter
       isSuccess = processRequest(deviceAddr, device, payload.c_str(), deviceTopic, disconnectAfter);
     }
     else {
+      tempPayload.toUpperCase();
+      payload = tempPayload.c_str();
       if ((strcmp(payload.c_str(), "PRESS") == 0) || (strcmp(payload.c_str(), "ON") == 0) || (strcmp(payload.c_str(), "OFF") == 0) || (strcmp(payload.c_str(), "OPEN") == 0) || (strcmp(payload.c_str(), "CLOSE") == 0) || (strcmp(payload.c_str(), "PAUSE") == 0)
           || (strcmp(payload.c_str(), "REQUESTSETTINGS") == 0) || (strcmp(payload.c_str(), "REQUESTINFO") == 0) || (strcmp(payload.c_str(), "GETSETTINGS") == 0) || (strcmp(payload.c_str(), "GETINFO") == 0)
           || (strcmp(payload.c_str(), "MODEPRESS") == 0) || (strcmp(payload.c_str(), "MODEPRESSINV") == 0) || (strcmp(payload.c_str(), "MODESWITCH") == 0) || (strcmp(payload.c_str(), "MODESWITCHINV") == 0)) {
@@ -6128,6 +6327,10 @@ void onConnectionEstablished() {
       }
     }
     addToPublish(lastWill, "online", true);
+    publishRecentFailures(false, 0);
+    if (includeSensorSystemInfo) {
+      addToPublish((esp32Topic + "/systemUptime/state").c_str(), "0.00", true);
+    }
 
     it = allCurtains.begin();
     while (it != allCurtains.end())
@@ -7909,17 +8112,17 @@ bool sendCommand(NimBLEAdvertisedDevice * advDeviceToUse, const char * type, int
   byte bArrayOpen[] =  {0x57, 0x0F, 0x45, 0x01, 0x05, 0xFF, 0x00};
   byte bArrayClose[] = {0x57, 0x0F, 0x45, 0x01, 0x05, 0xFF, 0x64};
   byte bArrayPause[] = {0x57, 0x0F, 0x45, 0x01, 0x00, 0xFF};
-  byte bArrayPos[] =  {0x57, 0x0F, 0x45, 0x01, 0x05, 0xFF, NULL};
+  byte bArrayPos[] =  {0x57, 0x0F, 0x45, 0x01, 0x05, 0xFF, 0x00};
   byte bArrayGetSettings[] = {0x57, 0x02};
-  byte bArrayHoldSecs[] = {0x57, 0x0F, 0x08, NULL };
-  byte bArrayBotMode[] = {0x57, 0x03, 0x64, NULL, NULL};
+  byte bArrayHoldSecs[] = {0x57, 0x0F, 0x08, 0x00};
+  byte bArrayBotMode[] = {0x57, 0x03, 0x64, 0x00, 0x00};
 
-  byte bArrayPressPass[] = {0x57, 0x11, NULL, NULL, NULL, NULL};
-  byte bArrayOnPass[] = {0x57, 0x11, NULL , NULL, NULL, NULL, 0x01};
-  byte bArrayOffPass[] = {0x57, 0x11, NULL, NULL, NULL, NULL, 0x02};
-  byte bArrayGetSettingsPass[] = {0x57, 0x12, NULL, NULL, NULL, NULL};
-  byte bArrayHoldSecsPass[] = {0x57, 0x1F, NULL, NULL, NULL, NULL, 0x08, NULL };
-  byte bArrayBotModePass[] = {0x57, 0x13, NULL, NULL, NULL, NULL, 0x64, NULL};       // The proper array to use for setting mode with password (firmware 4.9)
+  byte bArrayPressPass[] = {0x57, 0x11, 0x00, 0x00, 0x00, 0x00};
+  byte bArrayOnPass[] = {0x57, 0x11, 0x00, 0x00, 0x00, 0x00, 0x01};
+  byte bArrayOffPass[] = {0x57, 0x11, 0x00, 0x00, 0x00, 0x00, 0x02};
+  byte bArrayGetSettingsPass[] = {0x57, 0x12, 0x00, 0x00, 0x00, 0x00};
+  byte bArrayHoldSecsPass[] = {0x57, 0x1F, 0x00, 0x00, 0x00, 0x00, 0x08, 0x00};
+  byte bArrayBotModePass[] = {0x57, 0x13, 0x00, 0x00, 0x00, 0x00, 0x64, 0x00};       // The proper array to use for setting mode with password (firmware 4.9)
 
   std::string anAddr = advDeviceToUse->getAddress();
   if (!NimBLEDevice::getClientListSize()) {
