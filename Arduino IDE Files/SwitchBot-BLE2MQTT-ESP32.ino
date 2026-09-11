@@ -537,9 +537,9 @@ static const bool activeScanOnSchedule = true;               // perform an activ
 static const bool scanAfterControl = true;                   // perform requestInfo after successful control command (uses botScanTime).
 static const bool waitBetweenControl = true;                 // wait between commands sent to bot/curtain (avoids sending while bot is busy)
 static const bool getSettingsOnBoot = true;                  // Currently only works for bot (curtain documentation not available but can probably be reverse engineered easily). Get bot extra settings values like firmware, holdSecs, inverted, number of timers. ***If holdSecs is available it is used by waitBetweenControl
-static const bool retryBotOnBusy = true;                     // if bot responds with busy, the last control command will retry until success
-static const bool retryCurtainOnBusy = true;                 // if curtain responds with busy, the last control command will retry until success
-static const bool retryPlugOnBusy = true;                    // if plug responds with busy, the last control command will retry until success
+static const bool retryBotOnBusy = true;                     // if bot responds with busy, the last control command will retry up to noResponseRetryAmount times
+static const bool retryCurtainOnBusy = true;                 // if curtain responds with busy, the last control command will retry up to noResponseRetryAmount times
+static const bool retryPlugOnBusy = true;                    // if plug responds with busy, the last control command will retry up to noResponseRetryAmount times
 static const bool retryBotActionNoResponse = false;          // Retry if bot doesn't send a response. Bot default is false because no response can still mean the bot triggered.
 static const bool retryPlugActionNoResponse = true;          // Retry if plug doesn't send a response. Default is true. It shouldn't matter if plug receives the same command twice (or multiple times)
 static const bool retryBotSetNoResponse = true;              // Retry if bot doesn't send a response when requesting settings (hold, firwmare etc) or settings hold/mode
@@ -661,13 +661,11 @@ static const String serverIndex =
   "</form>";
 
 static EspMQTTClient client(
-  ssid,
-  password,
   mqtt_host,
+  mqtt_port,
   (mqtt_user == NULL || strlen(mqtt_user) < 1) ? NULL : mqtt_user,
   (mqtt_user == NULL || strlen(mqtt_user) < 1) ? NULL : mqtt_pass,
-  host,
-  mqtt_port
+  host
 );
 
 static const uint16_t mqtt_packet_size = 1300;
@@ -3464,12 +3462,11 @@ void publishHomeAssistantDiscoveryCurtainConfig(std::string & deviceName, std::s
                + "\"stat_t\":\"~/rssi\"}").c_str(), true);
 
   addToPublish((home_assistant_mqtt_prefix + "/sensor/" + deviceName + "/illuminance/config").c_str(), ("{\"~\":\"" + (curtainTopic + deviceName) + "\"," +
-               + "\"name\":\"" + haEntityName(deviceName, "Illuminance") + "\"," +
+               + "\"name\":\"" + haEntityName(deviceName, "Light level") + "\"," +
                + "\"device\": {\"identifiers\":[\"switchbot_" + deviceMac + "\"],\"manufacturer\":\"" + manufacturer + "\",\"model\":\"" + curtainModel + "\",\"name\": \"" + deviceName + "\" }," +
                + "\"avty_t\": \"" + lastWill + "\"," +
                + "\"uniq_id\":\"switchbot_" + deviceMac + "_illuminance\"," +
                + "\"stat_t\":\"~/attributes\"," +
-               + "\"dev_cla\":\"illuminance\"," +
                + "\"unit_of_meas\": \"Level\", " +
                + "\"value_template\":\"{{ value_json.light }}\"}").c_str(), true);
 
@@ -4384,6 +4381,9 @@ void setup () {
   if (useStaticIP) {
     WiFi.config(staticIP, staticGateway, staticSubnet, staticPrimaryDNS, staticSecondaryDNS);
   }
+  WiFi.mode(WIFI_STA);
+  WiFi.setHostname(host);
+  WiFi.setAutoReconnect(true);
   WiFi.begin(ssid, password);
   printAString("");
 
@@ -4424,6 +4424,8 @@ void setup () {
     }
     server.send(200, "text/html", serverIndex);
   });
+  static bool otaUploadAuthorized = false;
+  static bool otaUploadSucceeded = false;
   /*handling uploading firmware file */
   server.on("/update", HTTP_POST, []() {
     server.sendHeader("Connection", "close");
@@ -4432,10 +4434,22 @@ void setup () {
         return server.requestAuthentication();
       }
     }
-    server.send(200, "text/plain", (Update.hasError()) ? "FAIL" : "OK");
-    ESP.restart();
+    const bool succeeded = otaUploadAuthorized && otaUploadSucceeded;
+    otaUploadAuthorized = false;
+    otaUploadSucceeded = false;
+    server.send(succeeded ? 200 : 400, "text/plain", succeeded ? "OK" : "FAIL");
+    if (succeeded) {
+      ESP.restart();
+    }
   }, []() {
     HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      otaUploadSucceeded = false;
+      otaUploadAuthorized = !useLoginScreen || server.authenticate(otaUserId.c_str(), otaPass.c_str());
+    }
+    if (!otaUploadAuthorized) {
+      return;
+    }
     if (upload.status == UPLOAD_FILE_START) {
       if (printSerialOutputForDebugging) {
         Serial.printf("Update: %s\n", upload.filename.c_str());
@@ -4448,8 +4462,13 @@ void setup () {
       if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
         Update.printError(Serial);
       }
+    } else if (upload.status == UPLOAD_FILE_ABORTED) {
+      Update.abort();
+      otaUploadAuthorized = false;
+      otaUploadSucceeded = false;
     } else if (upload.status == UPLOAD_FILE_END) {
-      if (Update.end(true)) { //true to set the size to the current progress
+      if (Update.end(true)) {
+        otaUploadSucceeded = true; //true to set the size to the current progress
         if (printSerialOutputForDebugging) {
           Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
         }
@@ -4460,7 +4479,7 @@ void setup () {
   });
   server.begin();
 
-  client.setMqttReconnectionAttemptDelay(10);
+  client.setMqttReconnectionAttemptDelay(10000); // milliseconds; MQTT failure must not reset WiFi
   client.enableLastWillMessage(lastWill, "offline", true);
   client.setKeepAlive(60);
   client.setMaxPacketSize(mqtt_packet_size);
@@ -4645,10 +4664,25 @@ void setup () {
 
 }
 
+bool waitForScanEnd(unsigned long timeoutMs) {
+  const unsigned long started = millis();
+  while (pScan->isScanning()) {
+    if (static_cast<uint32_t>(millis() - started) >= timeoutMs) {
+      pScan->stop();
+      isRescanning = false;
+      publishStatus(ESPMQTTTopic, "errorScanTimeout");
+      return false;
+    }
+    delay(10);
+  }
+  return true;
+}
+
 void rescan(int seconds) {
   lastRescan = millis();
-  while (pScan->isScanning()) {
-    delay(50);
+  pScan->stop();
+  if (!waitForScanEnd(2000UL)) {
+    return;
   }
   allSwitchbotsScanned = {};
   //pScan->clearResults();
@@ -4659,7 +4693,6 @@ void rescan(int seconds) {
     addToPublish(ESPMQTTTopic.c_str(), "{\"status\":\"passivescanning\"}");
   }
   else {
-    isRescanning = true;
     isActiveScan = true;
     delay(50);
     addToPublish(ESPMQTTTopic.c_str(), "{\"status\":\"activescanning\"}");
@@ -4671,13 +4704,18 @@ void rescan(int seconds) {
   if (ledOnScan) {
     digitalWrite(LED_BUILTIN, ledONValue);
   }
-  pScan->start(seconds, rescanEndedCB, true);
+  isRescanning = true;
+  if (!pScan->start(seconds, rescanEndedCB, true)) {
+    isRescanning = false;
+    publishStatus(ESPMQTTTopic, "errorScanStart");
+  }
 }
 
 void scanForever() {
   //lastRescan = millis();
-  while (pScan->isScanning()) {
-    delay(50);
+  pScan->stop();
+  if (!waitForScanEnd(2000UL)) {
+    return;
   }
   //allSwitchbotsScanned = {};
   //lastRescan = millis();
@@ -4699,15 +4737,19 @@ void scanForever() {
   if (ledOnScan) {
     digitalWrite(LED_BUILTIN, ledONValue);
   }
-  pScan->start(0, scanForeverEnded, true);
+  if (!pScan->start(0, scanForeverEnded, true)) {
+    isRescanning = false;
+    publishStatus(ESPMQTTTopic, "errorScanStart");
+  }
 }
 
 void rescanFind(std::string aMac) {
   if (isRescanning) {
     return;
   }
-  while (pScan->isScanning()) {
-    delay(50);
+  pScan->stop();
+  if (!waitForScanEnd(2000UL)) {
+    return;
   }
 
   if (onlyPassiveScan && initialScanComplete) {
@@ -4742,7 +4784,10 @@ void rescanFind(std::string aMac) {
   if (ledOnScan) {
     digitalWrite(LED_BUILTIN, ledONValue);
   }
-  pScan->start(infoScanTime, scanEndedCB, true);
+  if (!pScan->start(infoScanTime, scanEndedCB, true)) {
+    isRescanning = false;
+    publishStatus(ESPMQTTTopic, "errorScanStart");
+  }
 }
 
 void getAllBotSettings() {
@@ -4848,7 +4893,6 @@ void pushBotButtons() {
     }
   }
 
-  delay(500);
   if (ledOnESPButtonPress) {
     digitalWrite(LED_BUILTIN, ledOFFValue);
   }
@@ -4869,8 +4913,20 @@ void checkWebServer() {
   }
 }
 
+static uint64_t uptimeMillis = 0;
+static uint32_t previousUptimeMillis = 0;
+
 void loop () {
+  const uint32_t now = millis();
+  uptimeMillis += (uint32_t)(now - previousUptimeMillis);
+  previousUptimeMillis = now;
   //printAString("START loop...");
+  // WiFi recovery is independent of MQTT broker availability.
+  static unsigned long lastWifiRetry = 0;
+  if (WiFi.status() != WL_CONNECTED && millis() - lastWifiRetry >= 30000UL) {
+    lastWifiRetry = millis();
+    WiFi.reconnect();
+  }
   client.loop();
   checkWebServer();
   server.handleClient();
@@ -4905,7 +4961,10 @@ void loop () {
     isActiveScan = true;
     pScan->setActiveScan(isActiveScan);
     delay(50);
-    pScan->start(initialScan, initialScanEndedCB, true);
+    if (!pScan->start(initialScan, initialScanEndedCB, true)) {
+      isRescanning = false;
+      publishStatus(ESPMQTTTopic, "errorScanStart");
+    }
   }
 
   if (initialScanComplete && client.isConnected() && !manualDebugStartESP32WithMQTT) {
@@ -4915,8 +4974,13 @@ void loop () {
     if (isRescanning) {
       lastRescan = millis();
     }
-    if (!processing && !espButtonPressed && digitalRead(0) == LOW) {
-      pushBotButtons();
+    static bool buttonWasDown = false;
+    static unsigned long lastButtonChange = 0;
+    const bool buttonDown = digitalRead(0) == LOW;
+    if (buttonDown != buttonWasDown && millis() - lastButtonChange >= 50UL) {
+      buttonWasDown = buttonDown;
+      lastButtonChange = millis();
+      if (buttonDown && !processing) { pushBotButtons(); }
     }
     if ((!waitForResponse) && (!processing) && (!(pScan->isScanning())) && (!isRescanning)) {
       if (getSettingsOnBoot && !gotSettings ) {
@@ -4959,7 +5023,7 @@ void deviceInfoPolling() {
   if (lastSystemInfoPoll == 0 || ((millis() - lastSystemInfoPoll) >= ((unsigned long)systemInfoTime * 1000UL))) {
     lastSystemInfoPoll = millis();
 
-    float uptimeHours = (millis() / 1000.0) / 3600.0;
+    float uptimeHours = uptimeMillis / 3600000.0;
     addToPublish((esp32Topic + "/systemUptime/state").c_str(), String(uptimeHours, 2).c_str(), true);
 
     StaticJsonDocument<160> doc;
@@ -5247,7 +5311,19 @@ void recurringScan() {
   }*/
 
 
+static unsigned long commandStartedAt = 0;
+static const unsigned long commandBudgetMs = 20000UL;
+
+bool commandBudgetAvailable() {
+  return static_cast<uint32_t>(millis() - commandStartedAt) < commandBudgetMs;
+}
+
+bool busyRetryAllowed(bool busy, bool enabled, int attempt) {
+  return busy && enabled && attempt <= noResponseRetryAmount;
+}
+
 bool processRequest(std::string macAdd, std::string aName, const char * command, std::string deviceTopic, bool disconnectAfter) {
+  commandStartedAt = millis();
   bool isSuccess = false;
   int count = 1;
   std::map<std::string, NimBLEAdvertisedDevice*>::iterator itS = allSwitchbotsDev.find(macAdd);
@@ -5257,14 +5333,15 @@ bool processRequest(std::string macAdd, std::string aName, const char * command,
     advDevice =  itS->second;
   }
   bool shouldContinue = (advDevice == nullptr);
-  while (shouldContinue) {
+  while (shouldContinue && commandBudgetAvailable()) {
     if (count > 3) {
       shouldContinue = false;
     }
     else {
       if (pScan->isScanning()) {
-        while (pScan->isScanning()) {
-          delay(10);
+        pScan->stop();
+        if (!waitForScanEnd(2000UL)) {
+          return false;
         }
       }
       if (ledOnScan) {
@@ -5274,8 +5351,9 @@ bool processRequest(std::string macAdd, std::string aName, const char * command,
       rescanFind(macAdd);
       //pScan->start(10 * count, scanEndedCB, true);
       delay(100);
-      while (pScan->isScanning()) {
-        delay(10);
+      if (!waitForScanEnd((unsigned long)infoScanTime * 1000UL + 2000UL)) {
+        overrideScan = false;
+        return false;
       }
       overrideScan = false;
       itS = allSwitchbotsDev.find(macAdd);
@@ -5298,6 +5376,9 @@ bool processRequest(std::string macAdd, std::string aName, const char * command,
   }
   else {
     isSuccess = sendToDevice(advDevice, aName, command, deviceTopic, disconnectAfter);
+    if (!isSuccess && !commandBudgetAvailable()) {
+      publishStatus(deviceTopic + "/status", "errorCommandTimeout");
+    }
   }
   return isSuccess;
 }
@@ -5381,8 +5462,15 @@ bool waitToProcess(QueueCommand aCommand) {
   return wait;
 }
 
+class ProcessingScope {
+  bool previous;
+public:
+  ProcessingScope() : previous(processing) { processing = true; }
+  ~ProcessingScope() { processing = previous; }
+};
+
 bool processQueue() {
-  processing = true;
+  ProcessingScope processingScope;
   struct QueueCommand aCommand;
   if (!commandQueue.isEmpty()) {
     bool disconnectAfter = true;
@@ -5498,6 +5586,7 @@ bool processQueue() {
                 }
                 while (noResponse && shouldContinue )
                 {
+                  delay(1); // Let the BLE and WiFi tasks run while awaiting notification.
                   waitForResponse = true;
                   //if (printSerialOutputForDebugging) {Serial.println("waiting for response...");}
                   if ((millis() - timeSent) > (waitForResponseSec * 1000)) {
@@ -5552,7 +5641,7 @@ bool processQueue() {
                 if (isNum && !lastCommandWasBusy) {
                   getSettingsAfter = true;
                 }
-                if (lastCommandWasBusy && retryBotOnBusy) {
+                if (busyRetryAllowed(lastCommandWasBusy, retryBotOnBusy, aCommand.currentTry)) {
                   requeue = true;
                   botsToWaitFor[aCommand.device] = true;
                   lastCommandWasBusy = false;
@@ -5591,6 +5680,7 @@ bool processQueue() {
 
                 while (noResponse && shouldContinue )
                 {
+                  delay(1); // Let the BLE and WiFi tasks run while awaiting notification.
                   waitForResponse = true;
                   //if (printSerialOutputForDebugging) {Serial.println("waiting for response...");}
                   if ((millis() - timeSent) > (waitForResponseSec * 1000)) {
@@ -5614,7 +5704,7 @@ bool processQueue() {
                   }
                 }
 
-                if (lastCommandWasBusy && retryPlugOnBusy) {
+                if (busyRetryAllowed(lastCommandWasBusy, retryPlugOnBusy, aCommand.currentTry)) {
                   requeue = true;
                   botsToWaitFor[aCommand.device] = true;
                   lastCommandWasBusy = false;
@@ -5650,6 +5740,7 @@ bool processQueue() {
 
                 while (noResponse && shouldContinue )
                 {
+                  delay(1); // Let the BLE and WiFi tasks run while awaiting notification.
                   waitForResponse = true;
                   printAString("waiting for response...");
 
@@ -5672,7 +5763,7 @@ bool processQueue() {
                     }
                   }
                 }
-                if (lastCommandWasBusy && retryCurtainOnBusy) {
+                if (busyRetryAllowed(lastCommandWasBusy, retryCurtainOnBusy, aCommand.currentTry)) {
                   requeue = true;
                   botsToWaitFor[aCommand.device] = true;
                   lastCommandWasBusy = false;
@@ -5737,27 +5828,19 @@ bool processQueue() {
 
         lastCommandWasBusy = false;
         if (getSettingsAfter && !skip) {
-          processing = true;
-          noResponse = true;
-          bool shouldContinue = true;
-          int count = 0;
-          bool sendInitial = true;
-          while (sendInitial || (lastCommandWasBusy && retryBotOnBusy) || (retryBotSetNoResponse && noResponse && (count <= noResponseRetryAmount))) {
-            sendInitial = false;
-            count++;
-            shouldContinue = true;
-            unsigned long timeSent = millis();
-            client.publish(ESPMQTTTopic.c_str(), "{\"status\":\"getsettings\"}");
-            controlMQTT(requestDevice, "REQUESTSETTINGS", disconnectAfter);
-            while (noResponse && shouldContinue )
-            {
-              waitForResponse = true;
-              //if (printSerialOutputForDebugging) {Serial.println("waiting for response...");}
-              if ((millis() - timeSent) > (waitForResponseSec * 1000)) {
-                shouldContinue = false;
-              }
-            }
-            waitForResponse = false;
+          // Return to loop() between requests so MQTT keepalive and OTA are serviced.
+          if (!commandQueue.isFull()) {
+            QueueCommand followup;
+            followup.payload = "REQUESTSETTINGS";
+            followup.topic = ESPMQTTTopic + "/control";
+            followup.device = requestDevice;
+            followup.disconnectAfter = true;
+            followup.priority = false;
+            followup.currentTry = 1;
+            commandQueue.enqueue(followup);
+          }
+          else {
+            publishStatus(ESPMQTTTopic, "errorQueueFull");
           }
         }
         commandQueue.dequeue();
@@ -5799,7 +5882,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
     bool isConnected = false;
     int count = 0;
     bool shouldContinue = true;
-    while (shouldContinue) {
+    while (shouldContinue && commandBudgetAvailable()) {
       if (count > 1) {
         delay(50);
       }
@@ -5825,7 +5908,7 @@ bool sendToDevice(NimBLEAdvertisedDevice * advDevice, std::string & aName, const
     count = 0;
     if (isConnected) {
       shouldContinue = true;
-      while (shouldContinue) {
+      while (shouldContinue && commandBudgetAvailable()) {
         if (count > 1) {
           delay(50);
         }
@@ -6103,37 +6186,33 @@ void performHoldOff(std::string aDevice, int aHold) {
   performHoldPressSequence(aDevice, "OFF", aHold );
 }
 
-void rescanMQTT(std::string & payload) {
-  isRescanning = true;
-  processing = true;
-  printAString("Processing Rescan MQTT...");
-  StaticJsonDocument<100> docIn;
+bool parseScanSeconds(const char *text, int &seconds) {
+  if (text == nullptr || *text == '\0') { return false; }
+  unsigned int value = 0;
+  for (const char *p = text; *p; ++p) {
+    if (*p < '0' || *p > '9') { return false; }
+    value = value * 10 + (*p - '0');
+    if (value > 300) { return false; }
+  }
+  if (value == 0) { return false; }
+  seconds = value;
+  return true;
+}
 
+void rescanMQTT(std::string & payload) {
+  ProcessingScope processingScope;
+  StaticJsonDocument<100> docIn;
   if (!parseMQTTPayload(docIn, payload.c_str(), "rescanMQTT")) {
-    processing = false;
     return;
   }
-
-  int value = docIn["sec"];
-  String secString = String(value);
-  if (strlen(secString.c_str()) != 0) {
-    bool isNum = is_number(secString.c_str());
-    if (isNum) {
-      int aVal;
-      sscanf(secString.c_str(), "%d", &aVal);
-      if (aVal >= 0) {
-        if (aVal > 300) {
-          aVal = 300;
-        }
-        rescan(aVal);
-      }
-    }
-    else {
-      publishStatus(ESPMQTTTopic, "errorJSONValue");
-      printAString("Parsing failed = value is not numeric");
-    }
+  // Zero means an endless NimBLE scan; never accept it for a timed rescan.
+  String seconds = docIn["sec"].as<String>();
+  int value = 0;
+  if (!parseScanSeconds(seconds.c_str(), value)) {
+    publishStatus(ESPMQTTTopic, "errorJSONValue");
+    return;
   }
-  processing = false;
+  rescan(value);
 }
 
 void requestInfoMQTT(std::string & payload) {
@@ -6329,7 +6408,7 @@ void onConnectionEstablished() {
     addToPublish(lastWill, "online", true);
     publishRecentFailures(false, 0);
     if (includeSensorSystemInfo) {
-      addToPublish((esp32Topic + "/systemUptime/state").c_str(), "0.00", true);
+      deviceInfoPolling();
     }
 
     it = allCurtains.begin();
@@ -7965,6 +8044,7 @@ void onConnectionEstablished() {
 }
 
 bool connectToServer(NimBLEAdvertisedDevice * advDeviceToUse) {
+  if (!commandBudgetAvailable()) { return false; }
   printAString("Try to connect. Try a reconnect first...");
   NimBLEClient* pClient = nullptr;
   if (NimBLEDevice::getClientListSize()) {
@@ -7995,6 +8075,7 @@ bool connectToServer(NimBLEAdvertisedDevice * advDeviceToUse) {
 
   }
   if (!pClient->isConnected()) {
+    if (!commandBudgetAvailable()) { return false; }
     if (!pClient->connect(advDeviceToUse)) {
       NimBLEDevice::deleteClient(pClient);
       printAString("Failed to connect, deleted client");
@@ -8135,7 +8216,8 @@ bool sendCommand(NimBLEAdvertisedDevice * advDeviceToUse, const char * type, int
 
   bool tryConnect = !(pClient->isConnected());
   int count = 1;
-  while (tryConnect  || !pClient ) {
+  while (tryConnect || !pClient) {
+    if (!commandBudgetAvailable()) { return false; }
     if (count > 20) {
       printAString("Failed to connect for sending command");
       return false;

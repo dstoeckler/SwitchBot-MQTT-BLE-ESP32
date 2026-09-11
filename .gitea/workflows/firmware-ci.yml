@@ -9,6 +9,8 @@ jobs:
   consistency:
     name: Source consistency
     runs-on: ubuntu-latest
+    container:
+      image: node:20-bookworm
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -21,12 +23,18 @@ jobs:
 
       - name: No trailing whitespace in firmware files
         run: |
-          ! grep -RIn --include='*.cpp' --include='*.ino' --include='*.ini' '[[:blank:]]$' .
+          ! grep -RIn --exclude-dir=.pio --include='*.cpp' --include='*.ino' --include='*.ini' '[[:blank:]]$' "Arduino IDE Files" "PlatformIO Files"
+
+      - name: Firmware regression tests (Python 3 and g++ required)
+        run: python3 -m unittest discover -s tests -v
 
   platformio-build:
-    name: PlatformIO smoke build
+    name: PlatformIO build matrix
     runs-on: ubuntu-latest
     needs: consistency
+    strategy:
+      matrix:
+        board: [esp32dev, m5stack-atom]
     container:
       image: node:20-bookworm
     steps:
@@ -42,8 +50,8 @@ jobs:
       - name: Install PlatformIO
         run: |
           python3 -m venv /tmp/platformio-venv
-          /tmp/platformio-venv/bin/pip install --no-cache-dir platformio
+          /tmp/platformio-venv/bin/pip install --no-cache-dir platformio==6.1.19
 
-      - name: Build esp32dev firmware
+      - name: Build firmware
         working-directory: PlatformIO Files/SwitchBot-BLE2MQTT-ESP32
-        run: /tmp/platformio-venv/bin/pio run -e esp32dev
+        run: /tmp/platformio-venv/bin/pio run -e ${{ matrix.board }}

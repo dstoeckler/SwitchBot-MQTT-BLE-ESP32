@@ -1,5 +1,7 @@
 ## SwitchBot-MQTT-BLE-ESP32 ##
 
+Local fork: see [hardening changes, supported builds and validation](docs/validation.md).
+
 Switchbot local control using ESP32. no switchbot hub used/required. works with any smarthub that supports MQTT
 
 https://github.com/devWaves/SwitchBot-MQTT-BLE-ESP32
