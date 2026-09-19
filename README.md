@@ -1,3 +1,8 @@
+# Be aware, I only fixed some issues with vibe code #
+
+original Author:
+   devWaves
+
 ## SwitchBot-MQTT-BLE-ESP32 ##
 
 Switchbot local control using ESP32. no switchbot hub used/required. works with any smarthub that supports MQTT
