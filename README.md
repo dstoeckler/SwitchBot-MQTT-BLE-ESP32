@@ -176,6 +176,12 @@ For a browser-only admin preview, run `python tools/preview_admin.py` and open `
 - Upstream contributors: HardcoreWR and vin-w.
 - Fork maintenance and AI-assisted changes: dstoeckler.
 
-Support this fork: [Buy dstoeckler a coffee](https://buymeacoffee.com/dstoeckler).
+Support this fork:
 
-Licensed under the [MIT License](LICENSE). You can [support the original author](https://www.buymeacoffee.com/devwaves). Historical upstream tutorials predate the admin interface and partition migration and should not be used as the installation procedure for this fork.
+<a href="https://www.buymeacoffee.com/dstoeckler" target="_blank" rel="noopener noreferrer"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy dstoeckler a coffee" height="60" width="217"></a>
+
+Support the original author, devWaves:
+
+<a href="https://www.buymeacoffee.com/devwaves" target="_blank" rel="noopener noreferrer"><img src="https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png" alt="Buy devWaves a coffee" height="41" width="174"></a>
+
+Licensed under the [MIT License](LICENSE). Historical upstream tutorials predate the admin interface and partition migration and should not be used as the installation procedure for this fork.
