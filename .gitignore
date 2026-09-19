@@ -2,3 +2,5 @@
 .pio/
 __pycache__/
 build-validation.log
+build-admin.log
+build-admin-preview-request.json

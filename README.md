@@ -2,6 +2,8 @@
 
 Local fork: see [hardening changes, supported builds and validation](docs/validation.md).
 
+The local admin firmware supports persistent WiFi, MQTT and device configuration in the browser. See the [admin setup and USB migration guide](docs/admin.md). The new partition layout requires an initial USB flash; do not upload this build over OTA to the previous layout.
+
 Switchbot local control using ESP32. no switchbot hub used/required. works with any smarthub that supports MQTT
 
 https://github.com/devWaves/SwitchBot-MQTT-BLE-ESP32

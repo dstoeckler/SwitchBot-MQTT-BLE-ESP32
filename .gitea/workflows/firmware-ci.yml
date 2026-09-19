@@ -28,6 +28,9 @@ jobs:
       - name: Firmware regression tests (Python 3 and g++ required)
         run: python3 -m unittest discover -s tests -v
 
+      - name: Embedded admin assets are current
+        run: python3 tools/sync_admin.py --check
+
   platformio-build:
     name: PlatformIO build matrix
     runs-on: ubuntu-latest
@@ -44,7 +47,7 @@ jobs:
       - name: Install build prerequisites
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends ca-certificates python3 python3-pip python3-venv
+          apt-get install -y --no-install-recommends ca-certificates python3 python3-pip python3-venv g++
           rm -rf /var/lib/apt/lists/*
 
       - name: Install PlatformIO
@@ -55,3 +58,6 @@ jobs:
       - name: Build firmware
         working-directory: PlatformIO Files/SwitchBot-BLE2MQTT-ESP32
         run: /tmp/platformio-venv/bin/pio run -e ${{ matrix.board }}
+
+      - name: Configuration codec and rollback tests with installed ArduinoJson
+        run: python3 -m unittest discover -s tests -v

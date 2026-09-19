@@ -339,6 +339,136 @@
 #include <ESPmDNS.h>
 #include <Update.h>
 #include <ArduinoQueue.h>
+#include <Preferences.h>
+
+// BEGIN GENERATED ADMIN CORE
+#include <string>
+#include <vector>
+#include <set>
+#include <cstdint>
+
+// Portable policy shared by firmware and host-side regression tests.
+namespace admin {
+struct Device {
+  std::string id, mac, type, password, entity = "switch";
+};
+struct Config {
+  int version = 1;
+  std::string host, ssid, wifiPassword, mqttHost, mqttUser, mqttPassword, topic;
+  int port = 1883, scanSeconds = 120, rescanSeconds = 10800, retries = 5;
+  bool staticAddress = false;
+  std::string ip, gateway, subnet, dns;
+  std::vector<Device> devices;
+};
+inline bool identifier(const std::string &s, size_t max) {
+  if (s.empty() || s.size() > max) return false;
+  for (char c : s) if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+      (c >= '0' && c <= '9') || c == '_' || c == '-')) return false;
+  return true;
+}
+inline bool macValid(const std::string &s) {
+  if (s.size() != 17) return false;
+  for (size_t i=0; i<s.size(); ++i) {
+    char c=s[i];
+    if (i%3==2) { if(c!=':') return false; }
+    else if (!((c>='0' && c<='9') || (c>='a' && c<='f') || (c>='A' && c<='F'))) return false;
+  }
+  return true;
+}
+inline std::string lowerMac(std::string s) {
+  for (char &c : s) if (c>='A' && c<='F') c += 'a'-'A';
+  return s;
+}
+inline bool ipv4(const std::string &s) {
+  int parts=0, value=0, digits=0;
+  for (size_t i=0; i<=s.size(); ++i) {
+    char c=i<s.size()?s[i]:'.';
+    if(c=='.') { if(!digits || value>255 || ++parts>4) return false; value=0; digits=0; }
+    else { if(c<'0'||c>'9'||++digits>3) return false; value=value*10+c-'0'; }
+  }
+  return parts==4;
+}
+inline std::string validate(const Config &c) {
+  if(c.version!=1) return "Unbekannte Konfigurationsversion.";
+  for(const auto *s:{&c.ssid,&c.wifiPassword,&c.mqttPassword,&c.mqttUser})
+    for(unsigned char x:*s) if(x==0||x<32||x==127) return "Zugangsdaten enthalten Steuerzeichen.";
+  if(!identifier(c.host,32) || c.host.find('_')!=std::string::npos) return "Hostname: 1–32 Buchstaben, Ziffern oder Bindestriche.";
+  if(c.ssid.empty()||c.ssid.size()>32) return "SSID: 1–32 Bytes erforderlich.";
+  if(!c.wifiPassword.empty() && (c.wifiPassword.size()<8||c.wifiPassword.size()>63)) return "WLAN-Passwort: leer oder 8–63 Zeichen.";
+  if(c.mqttHost.empty()||c.mqttHost.size()>128) return "MQTT-Host fehlt oder ist zu lang.";
+  for(char x:c.mqttHost) if(!((x>='a'&&x<='z')||(x>='A'&&x<='Z')||(x>='0'&&x<='9')||x=='.'||x=='-')) return "MQTT-Host muss ein DNS-Name oder eine IPv4-Adresse sein.";
+  if(c.port<1||c.port>65535||c.mqttUser.size()>64||c.mqttPassword.size()>128) return "MQTT-Port oder Zugangsdaten ungueltig.";
+  if(c.topic.empty()||c.topic.size()>96||c.topic.front()=='/'||c.topic.back()=='/') return "MQTT-Topic: 1–96 Zeichen, ohne aeussere Schraegen.";
+  for(char x:c.topic) if(!((x>='a'&&x<='z')||(x>='A'&&x<='Z')||(x>='0'&&x<='9')||x=='/'||x=='_'||x=='-')) return "Topic enthaelt ungueltige Zeichen.";
+  if(c.topic.find("//")!=std::string::npos) return "Topic enthaelt einen leeren Abschnitt.";
+  if(c.staticAddress && (!ipv4(c.ip)||!ipv4(c.gateway)||!ipv4(c.subnet)||!ipv4(c.dns))) return "Statische IPv4-Adressen pruefen.";
+  if(c.scanSeconds<1||c.scanSeconds>300||c.rescanSeconds<60||c.rescanSeconds>86400||c.retries<0||c.retries>10) return "Scan: 1–300 s, Intervall: 60–86400 s, Wiederholungen: 0–10.";
+  if(c.devices.size()>16) return "Maximal 16 Geraete in der Web-Konfiguration.";
+  std::set<std::string> names, macs;
+  for(const auto &d:c.devices) {
+    if(!identifier(d.id,32)||!macValid(d.mac)) return "Geraetename oder MAC-Adresse ungueltig.";
+    if(!names.insert(d.id).second||!macs.insert(lowerMac(d.mac)).second) return "Geraetename und MAC muessen eindeutig sein.";
+    if(d.type!="bot"&&d.type!="curtain"&&d.type!="meter"&&d.type!="contact"&&d.type!="motion"&&d.type!="plug") return "Unbekannter Geraetetyp.";
+    if(d.password.size()>32 || (d.type!="bot"&&!d.password.empty())) return "Geraetepasswort nur fuer Bots, maximal 32 Zeichen.";
+    for(unsigned char x:d.password) if(x<32||x==127) return "Bot-Passwort enthaelt Steuerzeichen.";
+    if(d.entity!="switch"&&d.entity!="light"&&d.entity!="button") return "Unbekannte Bot-Darstellung.";
+  }
+  return "";
+}
+inline bool cleanupNeeded(const Config &a,const Config &b) {
+  if(a.host!=b.host||a.topic!=b.topic||a.mqttHost!=b.mqttHost||a.port!=b.port||a.mqttUser!=b.mqttUser||a.mqttPassword!=b.mqttPassword||a.devices.size()!=b.devices.size()) return true;
+  for(const auto &d:a.devices) {
+    bool found=false;
+    for(const auto &n:b.devices) if(d.id==n.id&&lowerMac(d.mac)==lowerMac(n.mac)&&d.type==n.type&&d.entity==n.entity) found=true;
+    if(!found) return true;
+  }
+  return false;
+}
+}
+#include <ArduinoJson.h>
+
+namespace admin {
+inline void encode(JsonDocument &doc,const Config &c,bool secrets) {
+  doc.clear();
+  doc["version"]=c.version; doc["host"]=c.host; doc["ssid"]=c.ssid;
+  doc["mqttHost"]=c.mqttHost; doc["mqttUser"]=c.mqttUser; doc["topic"]=c.topic;
+  doc["port"]=c.port; doc["scanSeconds"]=c.scanSeconds; doc["rescanSeconds"]=c.rescanSeconds; doc["retries"]=c.retries;
+  doc["staticAddress"]=c.staticAddress; doc["ip"]=c.ip; doc["gateway"]=c.gateway; doc["subnet"]=c.subnet; doc["dns"]=c.dns;
+  if(secrets){doc["wifiPassword"]=c.wifiPassword;doc["mqttPassword"]=c.mqttPassword;}
+  JsonArray devices=doc.createNestedArray("devices");
+  for(const auto &d:c.devices){JsonObject o=devices.createNestedObject();o["id"]=d.id;o["mac"]=d.mac;o["type"]=d.type;o["entity"]=d.entity;if(secrets)o["password"]=d.password;}
+}
+inline bool decode(JsonVariantConst obj,const Config &old,Config &c,std::string &error) {
+  if(!obj.is<JsonObjectConst>()){error="Konfiguration muss ein JSON-Objekt sein.";return false;}
+  c=old;
+  const char *strings[]={"host","ssid","mqttHost","mqttUser","topic","ip","gateway","subnet","dns"};
+  std::string *targets[]={&c.host,&c.ssid,&c.mqttHost,&c.mqttUser,&c.topic,&c.ip,&c.gateway,&c.subnet,&c.dns};
+  for(size_t i=0;i<9;++i){if(!obj[strings[i]].is<const char*>()){error=std::string("Textfeld fehlt: ")+strings[i];return false;}*targets[i]=obj[strings[i]].as<std::string>();}
+  const char *integers[]={"version","port","scanSeconds","rescanSeconds","retries"};
+  int *values[]={&c.version,&c.port,&c.scanSeconds,&c.rescanSeconds,&c.retries};
+  for(size_t i=0;i<5;++i){if(!obj[integers[i]].is<int>()){error=std::string("Ganzzahl fehlt: ")+integers[i];return false;}*values[i]=obj[integers[i]].as<int>();}
+  if(!obj["staticAddress"].is<bool>()){error="staticAddress muss true/false sein.";return false;}c.staticAddress=obj["staticAddress"].as<bool>();
+  for(const char *key:{"wifiPassword","mqttPassword"}){
+    if(obj.as<JsonObjectConst>().containsKey(key)){
+      if(!obj[key].is<const char*>()){error="Passwort muss Text sein; zum Behalten weglassen.";return false;}
+      (std::string(key)=="wifiPassword"?c.wifiPassword:c.mqttPassword)=obj[key].as<std::string>();
+    }
+  }
+  if(!obj["devices"].is<JsonArrayConst>()||obj["devices"].size()>16){error="Geraeteliste fehlt oder umfasst mehr als 16 Geraete.";return false;}
+  c.devices.clear();
+  for(JsonObjectConst o:obj["devices"].as<JsonArrayConst>()) {
+    for(const char *key:{"id","mac","type","entity"})if(!o[key].is<const char*>()){error="Geraetefeld fehlt.";return false;}
+    Device d;d.id=o["id"].as<std::string>();d.mac=lowerMac(o["mac"].as<std::string>());d.type=o["type"].as<std::string>();d.entity=o["entity"].as<std::string>();
+    if(o.containsKey("password")){
+      if(!o["password"].is<const char*>()){error="Bot-Passwort muss Text sein.";return false;}
+      d.password=o["password"].as<std::string>();
+    } else for(const auto &previous:old.devices)if(lowerMac(previous.mac)==d.mac&&previous.type==d.type)d.password=previous.password;
+    c.devices.push_back(d);
+  }
+  error=validate(c);return error.empty();
+}
+}
+// END GENERATED ADMIN CORE
 
 /****************** CONFIGURATIONS TO CHANGE *******************/
 
@@ -355,7 +485,7 @@
 static const char* host = "esp32";                                  //  Unique name for ESP32. The name detected by your router and MQTT. If you are using more then 1 ESPs to control different switchbots be sure to use unique hostnames. Host is the MQTT Client name and is used in MQTT topics
 static const char* ssid = "SSID";                                   //  WIFI SSID
 static const char* password = "Password";                           //  WIFI Password
-static const bool useStaticIP = false;                              //  Set true to use the fixed network settings below instead of DHCP
+static bool useStaticIP = false;                              //  Set true to use the fixed network settings below instead of DHCP
 static const bool disableWiFiSleep = true;                          //  Keep WiFi awake to reduce MQTT/Home Assistant availability flapping
 static IPAddress staticIP(192, 168, 0, 50);                         //  ESP32 fixed IP when useStaticIP = true
 static IPAddress staticGateway(192, 168, 0, 1);                     //  Network gateway when useStaticIP = true
@@ -368,8 +498,8 @@ static IPAddress staticSecondaryDNS(8, 8, 8, 8);                    //  Secondar
 static const char* mqtt_host = "192.168.0.1";                       //  MQTT Broker server ip
 static const char* mqtt_user = "switchbot";                         //  MQTT Broker username. If empty or NULL, no authentication will be used
 static const char* mqtt_pass = "switchbot";                         //  MQTT Broker password
-static const int mqtt_port = 1883;                                  //  MQTT Port
-static const std::string mqtt_main_topic = "switchbot";             //  MQTT main topic
+static int mqtt_port = 1883;                                  //  MQTT Port
+static std::string mqtt_main_topic = "switchbot";             //  MQTT main topic
 
 /* Mesh Settings */
 /* Ignore if only one ESP32 is used */
@@ -483,9 +613,7 @@ static const bool ledOnScan = true;                  // Turn on LED while scanni
 static const bool ledOnCommand = true;               // Turn on LED while MQTT command is processing. If scanning, LED will blink after scan completes. You may not notice it, there is no delay after scan
 
 /* Webserver Settings */
-static const bool useLoginScreen = false;            //  use a basic login popup to avoid unwanted access
-static const String otaUserId = "admin";             //  user Id for OTA update. Ignore if useLoginScreen = false
-static const String otaPass = "admin";               //  password for OTA update. Ignore if useLoginScreen = false
+static String otaPass;                              // Loaded/generated in NVS; admin and OTA always require authentication
 static WebServer server(80);                         //  default port 80
 
 /* Home Assistant Settings */
@@ -504,14 +632,14 @@ static const bool includeInfoBtMAC = false;                                // In
 /* Switchbot General Settings */
 static const int tryConnecting = 60;                         // How many times to try connecting to bot
 static const int trySending = 30;                            // How many times to try sending command to bot
-static const int initialScan = 120;                          // How many seconds to scan for bots on ESP reboot and autoRescan. Once all devices are found scan stops, so you can set this to a big number
+static int initialScan = 120;                          // How many seconds to scan for bots on ESP reboot and autoRescan. Once all devices are found scan stops, so you can set this to a big number
 static const int infoScanTime = 60;                          // How many seconds to scan for single device status updates
-static const int rescanTime = 10800;                         // Automatically perform a full active scan for device info of all devices every X seconds (default 3 hours). XXXXActiveScanSecs will also active scan on schedule
+static int rescanTime = 10800;                         // Automatically perform a full active scan for device info of all devices every X seconds (default 3 hours). XXXXActiveScanSecs will also active scan on schedule
 static const int queueSize = 50;                             // Max number of control/requestInfo/rescan MQTT commands stored in the queue. If you send more then queueSize, they will be ignored
 static const int defaultBotWaitTime = 2;                     // wait at least X seconds between control command send to bots. ESP32 will detect if bot is in press mode with a hold time and will add hold time to this value per device
 static const int defaultCurtainWaitTime = 0;                 // wait at least X seconds between control command send to curtains
 static const int waitForResponseSec = 20;                    // How many seconds to wait for a bot/curtain response
-static const int noResponseRetryAmount = 5;                  // How many times to retry if no response received
+static int noResponseRetryAmount = 5;                  // How many times to retry if no response received
 static const int defaultBotScanAfterControlSecs = 10;        // Default How many seconds to wait for state/status update call after set/control command. *override with botScanTime list
 static const int defaultCurtainScanAfterControlSecs = 30;    // Default How many seconds to wait for state/status update call after set/control command. *override with botScanTime list. Also used by scanWhileCurtainIsMoving
 static const int defaultBotMQTTUpdateSecs = 600;             // Used only when alwaysMQTTUpdate = false. Default MQTT Update for bot every X seconds. Note: a change in state will be always be published either way during active scanning
@@ -585,7 +713,7 @@ static std::map<std::string, int> botWaitBetweenControlTimes = {
 
 /* ANYTHING CHANGED BELOW THIS COMMENT MAY RESULT IN ISSUES - ALL SETTINGS TO CONFIGURE ARE ABOVE THIS LINE */
 
-static const String versionNum = "v7.1";
+static const String versionNum = "v7.1-admin.1";
 
 /*
    Server Index Page
@@ -593,72 +721,241 @@ static const String versionNum = "v7.1";
 static const char* hostForScan = (meshHost == NULL || strlen(meshHost) < 1) ? host : meshHost;
 static const char* hostForControl = host;
 
-static const String serverIndex =
-  "<link rel='stylesheet' href='https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css'>"
-  "<style> .ui-progressbar { position: relative; }"
-  ".progress-label { position: absolute; width: 100%; text-align: center; top: 6px; font-weight: bold; text-shadow: 1px 1px 0 #fff; }</style>"
-  "<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-  "<script src='https://ajax.googleapis.com/ajax/libs/jquery/3.2.1/jquery.min.js'></script>"
-  "<script src='https://code.jquery.com/ui/1.12.1/jquery-ui.js'></script>"
-  "<script>"
-  "$( function() { var progressbar = $( \"#progressbar\" ), progressLabel = $( '.progress-label' );"
-  "progressbar.progressbar({ value: '0', change: function() {"
-  "progressLabel.text( progressbar.progressbar( 'value' ) + '%' );},"
-  "complete: function() { progressLabel.text( 'Uploaded!' ); } });"
-  "progressbar.find( '.ui-progressbar-value' ).css({'background': '#8fdbb2'});"
-  "$('form').submit(function(e){"
-  "e.preventDefault();"
-  "var form = $('#upload_form')[0];"
-  "var data = new FormData(form);"
-  " $.ajax({"
-  "url: '/update',"
-  "type: 'POST',"
-  "data: data,"
-  "contentType: false,"
-  "processData:false,"
-  "xhr: function() {"
-  "var xhr = new window.XMLHttpRequest();"
-  "xhr.upload.addEventListener('progress', function(evt) {"
-  "if (evt.lengthComputable) {"
-  "var per = evt.loaded / evt.total;"
-  "progressbar.progressbar( \"value\", Math.round(per*100) );"
-  "}"
-  "}, false);"
-  "return xhr;"
-  "},"
-  "success:function(d, s) {"
-  "console.log('success!')"
-  "},"
-  "error: function (a, b, c) {"
-  "}"
-  "});"
-  "});"
-  "});"
-  "</script>"
-  "<table bgcolor='A09F9F' align='center' style='top: 250px;position: relative;width: 30%;'>"
-  "<tr>"
-  "<td colspan=2>"
-  "<center><font size=5><b>SwitchBot ESP32 MQTT version: " + versionNum + "</b></font> <font size=1><b>(Unofficial)</b></font></center>"
-  "<center><font size=3>Primary Hostname/MQTT Client Name: " + std::string(hostForControl).c_str() + "</font></center>"
-  "<center><font size=3>Mesh Hostname/MQTT Client Name: " + std::string(hostForScan).c_str() + "</font></center>"
-  "<center><font size=3>MQTT Main Topic: " + std::string(mqtt_main_topic).c_str() + "</font></center>"
-  "<br>"
-  "</td>"
-  "<br>"
-  "<br>"
-  "</tr>"
-  "<tr>"
-  "<td>Upload .bin file:</td>"
-  "<td><input type='file' name='update'></td>"
-  "</tr>"
-  "<tr>"
-  "<td colspan='2'><div id='progressbar'><div class='progress-label'>0%</div></div></td>"
-  "</tr>"
-  "<tr>"
-  "<td colspan='2' align='center'><input type='submit' value='Update'></td>"
-  "</tr>"
-  "</table>"
-  "</form>";
+// BEGIN GENERATED ADMIN UI
+static const uint8_t adminPage[] PROGMEM = {
+31,139,8,0,0,0,0,0,2,255,173,91,219,114,27,71,146,125,215,87,180,96,239,52,
+176,2,154,0,120,177,4,16,208,146,18,37,123,45,201,90,147,182,55,134,193,216,104,116,
+87,3,101,54,186,219,125,33,8,130,136,152,135,249,140,137,157,23,199,126,194,204,139,159,
+134,127,50,95,178,39,235,210,55,0,180,180,177,17,54,209,151,170,172,204,172,188,156,204,
+106,29,63,117,67,39,93,70,204,152,165,115,127,252,228,152,126,12,223,14,166,163,134,203,
+26,227,227,57,75,109,195,153,217,113,194,210,81,35,75,189,206,115,253,52,176,231,108,212,
+184,225,108,17,133,113,218,48,156,48,72,89,128,81,11,238,166,179,145,203,110,184,195,58,
+226,166,205,3,158,114,219,239,36,142,237,179,81,175,129,149,82,158,250,108,124,190,224,169,
+51,59,13,83,227,31,127,55,126,100,241,194,246,211,44,152,30,239,201,215,79,142,147,116,
+73,191,131,56,12,211,149,135,37,58,158,61,231,254,114,144,44,147,148,205,59,25,111,39,
+118,144,116,18,22,115,111,232,132,126,24,15,190,96,207,153,235,237,15,39,182,115,61,141,
+195,44,112,7,95,244,186,189,175,250,93,57,0,108,204,216,156,13,92,59,190,94,255,235,
+106,18,222,118,18,126,199,131,233,96,18,198,46,139,59,120,178,158,132,238,114,53,183,227,
+41,15,6,221,245,140,217,120,209,158,219,60,192,195,91,41,214,160,215,61,234,70,183,67,
+53,202,206,210,112,24,217,174,75,148,250,207,163,91,53,107,229,242,36,242,237,229,192,243,
+217,237,208,246,249,52,232,112,240,158,12,28,232,139,197,195,159,179,36,229,222,178,163,52,
+56,72,34,27,154,155,176,116,193,88,160,41,130,169,52,13,231,88,147,8,247,164,46,192,
+54,27,244,191,42,120,56,136,110,13,112,219,47,189,238,189,40,94,119,141,174,209,23,4,
+246,203,35,142,240,36,90,249,60,96,157,25,227,211,89,58,232,89,71,90,153,182,61,121,
+238,60,95,91,108,201,38,113,184,88,169,199,71,47,92,199,57,28,150,168,244,177,142,207,
+82,72,212,33,9,132,22,64,216,154,216,238,148,173,164,106,7,61,48,152,132,62,119,141,
+47,246,247,15,14,14,143,134,74,231,177,237,242,44,25,16,119,185,18,161,67,67,144,45,
+173,178,79,36,167,49,119,115,181,210,205,144,254,116,160,84,60,73,25,52,233,103,243,32,
+25,244,188,216,192,255,195,169,29,13,122,180,35,9,115,82,30,6,91,184,233,59,251,47,
+14,94,84,109,230,171,126,175,239,212,24,236,29,148,24,236,31,228,186,205,247,135,150,177,
+96,31,108,37,120,146,172,12,122,123,157,222,218,183,39,204,207,249,158,248,161,115,93,19,
+77,43,125,226,57,142,59,209,219,70,111,176,115,180,77,60,136,178,180,157,48,31,130,180,
+39,25,150,12,196,78,14,120,48,131,11,164,195,77,201,14,186,135,189,163,186,158,191,42,
+73,209,147,70,92,88,117,247,95,42,235,172,138,231,117,159,122,209,223,175,58,157,156,120,
+73,49,101,4,47,115,174,225,75,87,138,128,112,16,165,173,88,152,25,233,74,9,225,100,
+113,2,50,81,200,133,79,148,215,233,239,195,84,14,107,235,200,105,86,20,115,80,92,174,
+202,227,143,14,97,154,125,61,190,251,162,127,216,99,90,47,93,169,240,133,52,243,163,195,
+174,38,228,34,232,193,87,213,36,207,155,244,237,231,234,221,0,59,102,79,124,230,174,66,
+178,235,116,57,176,136,29,201,240,194,230,233,218,178,133,89,37,85,87,23,86,71,186,165,
+187,206,34,198,45,253,209,42,72,67,101,148,86,50,183,125,127,85,115,37,197,201,11,215,
+246,156,254,218,146,241,84,25,174,156,187,225,74,249,134,30,146,189,12,63,211,65,186,6,
+205,211,43,13,60,30,39,105,199,153,113,223,45,175,218,93,127,49,103,73,98,195,165,163,
+48,225,36,246,0,225,203,185,94,14,5,83,36,239,93,135,7,46,187,29,244,11,142,40,
+48,145,176,53,51,164,216,84,219,234,201,129,61,92,204,16,32,69,20,97,131,40,102,66,
+119,249,186,3,8,145,46,115,85,7,97,192,242,119,22,139,227,48,174,88,195,225,65,127,
+178,223,95,187,254,103,7,140,126,41,112,174,221,116,85,221,17,215,205,211,195,48,101,183,
+105,71,68,246,129,48,236,97,120,195,98,207,15,23,114,215,237,96,185,128,119,178,181,139,
+196,201,253,100,85,182,0,242,234,36,155,11,43,174,57,129,142,192,47,38,142,219,91,91,
+30,114,96,61,157,60,158,59,72,12,17,81,55,179,142,38,103,68,133,24,181,48,107,87,
+99,253,250,223,230,204,229,118,179,136,20,71,7,160,221,90,149,147,99,190,225,207,243,56,
+189,83,211,121,52,174,78,82,150,190,123,90,93,17,34,144,230,242,168,120,82,86,241,65,
+158,139,13,149,141,42,198,179,126,114,188,167,112,198,177,28,54,62,118,249,141,248,99,56,
+190,157,36,163,134,202,126,141,241,187,239,190,61,121,119,102,188,61,251,254,225,207,23,103,
+63,158,125,255,211,201,187,139,31,62,188,61,222,19,83,102,189,18,166,57,133,8,83,118,
+188,135,135,234,53,182,39,208,36,5,39,13,131,187,184,20,3,27,99,32,160,9,92,7,
+8,200,88,240,216,53,236,204,155,178,9,226,38,24,196,76,80,81,252,61,57,38,109,75,
+14,137,128,50,255,134,17,135,0,88,141,36,181,211,44,105,24,118,204,237,142,207,111,240,
+40,66,164,72,9,210,9,70,0,172,164,238,193,113,127,252,240,151,9,139,19,238,204,176,
+14,110,143,93,95,16,85,84,112,159,142,207,197,53,38,167,184,117,199,63,17,119,83,230,
+131,153,192,248,231,159,254,7,47,92,34,237,227,143,166,252,228,216,11,227,185,164,4,88,
+128,13,38,90,30,103,190,139,123,241,92,222,52,12,29,96,13,177,13,208,135,14,214,218,
+50,186,185,35,54,42,219,66,70,210,168,73,243,211,187,147,15,198,31,140,15,44,189,91,
+176,248,90,138,36,82,175,1,134,70,141,89,152,164,141,241,7,192,87,131,44,66,111,146,
+24,49,62,22,249,75,48,39,198,25,49,251,37,227,49,88,131,217,251,44,152,2,218,54,
+246,251,13,35,178,9,233,4,163,198,229,73,231,143,118,231,174,219,121,209,185,122,214,168,
+172,148,36,196,29,241,211,17,203,53,207,207,191,121,221,218,178,148,24,184,107,169,10,201,
+5,247,248,71,136,190,128,134,32,4,203,88,98,136,5,212,195,116,11,245,202,28,67,164,
+230,70,148,223,83,86,118,66,184,25,75,241,60,96,139,78,241,174,196,200,209,62,100,246,
+17,92,102,161,15,181,141,26,239,24,148,71,187,192,130,1,76,33,137,24,12,136,197,41,
+24,210,188,24,19,54,3,160,103,129,150,161,204,149,227,51,59,254,9,172,105,150,52,92,
+104,140,191,243,60,22,40,193,140,112,22,176,130,34,226,234,130,33,185,4,90,206,39,199,
+42,168,194,185,100,20,21,182,202,9,227,27,223,124,236,156,184,49,124,3,251,171,223,110,
+114,66,118,206,157,19,87,140,220,228,166,76,238,230,64,19,220,228,164,188,77,60,106,140,
+203,139,111,172,73,3,202,19,166,8,114,11,123,217,24,191,149,23,91,166,228,67,42,38,
+150,77,2,6,115,62,23,191,119,115,59,185,222,182,156,30,86,158,234,6,240,199,215,31,
+206,59,231,44,134,48,91,102,137,17,240,106,173,224,146,107,151,29,238,253,127,92,92,108,
+120,217,252,151,52,253,90,120,218,105,28,94,35,227,239,214,69,62,116,171,7,244,250,207,
+107,150,7,212,105,245,142,158,91,61,171,223,173,138,36,42,209,241,199,237,110,32,203,84,
+185,187,65,54,71,200,43,47,200,225,202,61,97,241,176,245,195,195,253,195,198,134,56,63,
+160,200,132,56,44,200,210,59,184,62,60,122,135,48,98,96,197,121,14,234,126,22,122,222,
+230,2,117,199,38,197,62,230,216,149,57,255,87,199,222,212,239,255,139,103,191,7,111,155,
+190,84,145,200,0,16,241,160,200,237,46,132,204,205,29,53,227,212,78,120,34,30,108,209,
+130,28,184,213,118,94,28,129,191,72,39,11,1,179,97,242,156,169,160,111,176,120,250,240,
+107,112,7,58,179,24,137,140,130,116,96,25,39,16,204,248,58,156,179,206,73,66,235,218,
+64,69,103,64,100,241,195,175,152,131,156,66,73,111,194,248,220,120,248,51,2,64,28,24,
+33,37,146,119,15,127,163,40,65,175,98,198,3,62,77,135,6,160,226,195,111,177,49,207,
+146,68,36,155,9,79,168,76,155,18,7,228,21,224,32,38,237,78,236,216,72,48,201,58,
+222,139,182,249,153,22,129,234,202,134,112,186,28,101,116,222,50,48,150,50,233,129,117,97,
+127,12,227,153,77,81,138,25,106,28,109,73,32,162,151,216,64,106,188,128,43,227,46,51,
+122,71,122,140,133,156,254,223,50,229,27,246,196,139,1,45,130,127,254,233,47,144,108,193,
+166,169,20,23,178,18,129,212,184,6,223,106,162,100,95,131,18,9,228,18,141,57,202,121,
+91,213,75,120,37,225,154,50,20,121,35,49,17,50,127,99,252,76,17,54,102,60,184,203,
+160,203,41,25,139,28,166,201,238,136,74,39,138,111,64,129,159,56,3,199,48,111,0,43,
+154,95,11,85,137,99,7,231,12,8,218,165,128,104,103,180,45,156,242,207,77,232,251,73,
+10,11,113,57,17,58,199,184,4,73,156,93,103,164,209,173,137,188,68,170,22,106,42,17,
+102,191,219,45,44,182,194,12,130,100,153,157,111,8,171,223,96,43,171,204,196,159,194,76,
+149,212,54,118,142,186,138,159,231,128,242,187,57,74,99,78,219,248,222,190,69,177,237,179,
+13,125,110,89,89,78,217,182,166,94,178,87,89,111,199,38,158,139,200,83,218,67,224,212,
+148,249,190,222,197,186,185,159,221,82,148,103,20,89,100,124,18,214,169,240,195,195,223,240,
+42,182,140,83,114,221,111,230,145,136,99,62,227,19,242,135,194,79,254,152,77,109,96,85,
+215,166,233,88,82,208,25,26,1,66,114,245,29,54,192,153,249,156,61,252,21,56,128,76,
+38,21,6,87,56,193,167,27,59,187,149,169,235,223,207,191,251,96,200,27,142,40,82,178,
+245,157,83,249,188,52,85,222,212,166,74,55,41,97,15,49,232,13,247,153,222,32,79,92,
+219,142,195,162,20,252,70,145,207,29,155,152,222,251,57,9,131,182,69,127,27,240,65,23,
+10,218,162,116,248,191,82,39,60,212,247,83,4,147,224,225,87,103,150,164,70,144,197,64,
+247,44,129,55,189,65,53,144,249,54,54,224,109,145,83,100,157,67,187,10,235,72,17,35,
+231,198,52,126,248,13,57,193,56,149,141,153,122,68,84,133,84,53,46,202,218,143,130,61,
+128,189,51,19,116,206,213,26,1,170,10,59,166,72,229,22,145,31,187,105,192,113,140,8,
+139,121,169,68,154,116,79,233,198,58,158,196,227,115,108,45,226,189,156,244,145,70,81,85,
+230,177,153,223,150,60,211,115,178,26,25,206,191,13,3,143,79,179,88,104,13,3,148,177,
+34,123,146,185,170,192,168,246,80,241,172,90,87,122,15,0,209,160,1,32,185,156,237,63,
+8,46,37,243,229,237,204,29,100,79,23,83,116,9,237,214,35,160,11,135,67,254,146,76,
+169,210,174,94,59,201,74,183,228,238,54,205,170,35,17,65,234,49,40,82,157,245,121,88,
+132,7,5,22,169,215,28,155,172,189,34,77,199,115,192,60,13,35,22,58,28,109,141,69,
+149,73,159,195,216,35,62,135,212,135,200,87,136,171,202,214,90,207,161,196,34,133,109,108,
+105,177,137,117,31,42,163,202,129,33,120,6,16,169,4,24,74,103,169,42,89,195,69,34,
+192,3,12,4,62,38,45,62,198,248,57,236,1,118,170,156,70,103,221,138,18,73,15,11,
+59,6,140,120,163,174,58,63,68,20,208,140,166,53,225,91,19,73,62,101,107,184,160,89,
+143,41,43,139,252,208,126,68,73,154,13,99,22,66,90,219,101,143,168,233,67,38,115,179,
+17,9,120,234,50,35,159,45,195,71,156,48,159,226,249,71,56,141,104,78,34,22,146,227,
+230,213,90,197,19,55,153,69,206,36,127,163,170,37,143,19,155,30,40,113,71,29,125,236,
+137,158,12,10,82,110,251,225,84,26,138,180,59,225,128,37,13,232,6,218,193,243,110,222,
+18,253,221,150,189,232,71,110,57,159,168,244,197,37,56,60,229,41,246,115,194,8,47,164,
+124,90,100,203,58,79,23,236,150,170,194,223,75,88,165,105,175,236,192,97,126,163,170,58,
+128,173,73,204,8,252,110,36,172,210,212,19,97,48,141,29,241,79,147,58,45,115,189,161,
+113,210,44,133,57,39,230,81,58,126,98,102,168,196,17,225,184,147,154,195,39,88,7,121,
+228,203,17,214,28,187,161,147,1,205,167,214,148,165,103,62,163,203,211,229,55,110,147,187,
+45,58,165,50,156,36,246,70,166,217,78,236,27,230,142,130,204,247,219,147,44,89,142,60,
+219,79,152,38,69,125,221,55,34,198,142,46,77,234,7,153,109,147,122,53,248,209,69,171,
+186,164,146,15,151,162,22,193,47,143,240,71,21,236,52,71,148,223,184,64,69,109,94,13,
+37,113,137,138,114,242,148,63,105,104,1,217,112,87,129,112,226,94,0,43,208,120,130,124,
+36,83,32,74,254,38,49,218,90,225,109,134,188,129,40,134,140,21,206,121,194,154,32,16,
+250,55,108,52,94,201,69,165,6,71,95,54,205,178,25,152,173,97,237,9,25,134,217,178,
+136,238,43,117,176,75,215,138,117,55,12,216,8,168,52,35,194,146,164,229,248,33,214,107,
+13,213,138,77,241,186,53,92,151,40,75,219,1,217,48,112,128,48,174,71,205,22,109,84,
+192,154,66,235,101,38,164,173,108,27,154,198,68,86,45,138,183,130,230,136,24,97,86,20,
+179,27,176,250,154,121,118,230,167,96,166,76,124,173,39,37,179,112,241,62,116,109,31,3,
+214,248,175,80,165,106,163,54,147,182,56,71,144,198,208,90,129,45,245,166,166,146,100,88,
+121,37,12,155,138,200,145,152,254,210,20,63,230,192,52,177,136,157,44,3,199,40,118,45,
+226,205,200,78,103,109,58,104,110,169,221,137,71,54,157,39,1,102,160,182,147,175,87,115,
+150,206,66,119,64,195,70,163,17,129,125,15,1,208,125,105,190,61,187,0,233,143,223,157,
+95,152,109,7,32,26,12,65,190,100,96,38,224,160,19,2,150,240,192,108,203,134,113,178,
+57,127,181,30,172,76,37,72,231,2,46,8,98,117,228,7,139,251,207,206,171,243,239,223,
+116,46,80,173,6,230,128,188,102,45,88,222,36,152,95,13,8,138,90,228,149,193,148,123,
+203,166,144,16,138,86,182,99,167,182,18,51,22,192,18,187,192,189,230,211,216,10,175,91,
+233,12,169,205,56,35,181,53,105,160,60,207,185,191,55,79,2,81,205,9,0,6,80,69,
+137,2,1,194,36,115,19,54,79,131,203,59,9,50,77,119,180,226,46,148,223,158,219,14,
+253,80,156,25,152,147,16,110,70,186,74,151,80,149,168,162,205,181,222,0,88,82,30,56,
+160,83,56,176,138,29,77,19,17,8,203,49,191,180,203,166,172,112,77,122,202,131,128,197,
+95,95,188,127,55,50,75,41,119,172,10,106,209,44,146,9,149,56,237,92,179,37,112,184,
+251,89,237,229,255,146,253,229,74,171,100,252,254,228,85,222,89,171,211,135,216,59,90,106,
+95,213,58,62,39,39,131,211,211,193,171,87,131,215,175,7,103,103,131,55,111,54,214,41,
+154,7,199,242,80,184,180,14,233,21,19,194,72,104,94,134,133,6,212,140,88,30,2,43,
+202,231,245,247,78,22,167,54,1,135,87,242,98,215,56,152,63,1,251,247,244,179,147,22,
+172,24,57,171,49,254,150,46,174,83,32,131,36,220,57,122,30,138,108,140,68,179,96,83,
+96,131,228,241,225,145,159,77,129,228,240,215,120,15,56,93,12,219,147,138,40,52,85,199,
+91,36,126,231,181,45,43,86,250,170,101,67,115,210,12,55,116,39,173,178,65,53,8,21,
+159,59,89,211,41,243,194,78,30,25,229,211,137,100,99,252,78,158,239,236,228,94,254,72,
+184,79,140,231,96,191,110,86,209,78,148,95,179,225,199,64,255,238,134,99,169,179,88,101,
+109,131,17,209,103,220,236,49,150,153,223,210,98,252,244,194,92,172,36,199,192,200,25,245,
+178,107,61,177,223,41,207,213,50,242,211,130,26,61,151,145,90,80,60,23,12,110,129,151,
+0,53,0,237,77,25,156,32,180,17,122,198,165,41,1,136,77,64,131,22,196,143,52,36,
+243,170,133,72,244,75,198,226,229,185,216,93,76,53,47,11,133,153,207,240,243,204,108,92,
+33,87,73,227,112,47,241,228,234,254,222,104,210,128,209,72,19,122,169,35,35,226,102,107,
+248,4,241,217,181,244,230,61,45,5,253,199,215,203,183,187,180,96,78,102,248,100,215,220,
+154,138,174,74,40,64,36,81,130,2,43,176,36,147,8,193,31,83,117,9,237,44,17,165,
+191,110,53,20,219,255,210,248,137,199,215,200,140,178,215,16,108,52,9,44,179,69,194,196,
+108,30,222,16,140,89,255,62,127,194,36,182,115,151,198,203,149,98,15,121,222,220,195,223,
+61,26,110,182,41,37,61,170,52,94,82,23,146,166,134,36,166,52,61,101,121,198,34,67,
+105,64,165,208,148,154,205,179,212,66,210,156,178,9,202,253,132,218,218,212,136,230,212,68,
+65,109,108,76,217,34,156,5,169,17,193,203,68,127,3,91,186,70,150,7,196,0,184,209,
+11,48,75,93,181,37,194,90,175,53,10,206,68,121,40,16,152,74,147,8,238,163,71,133,
+16,41,161,216,117,24,22,165,221,97,201,150,165,37,107,99,40,76,184,109,10,183,254,4,
+83,86,134,172,207,142,71,79,177,4,182,237,211,248,194,150,137,26,126,36,133,27,202,159,
+166,128,160,170,111,141,81,192,67,40,26,155,204,175,160,68,148,191,126,211,105,173,106,210,
+20,197,66,235,75,248,147,150,221,185,188,134,131,153,27,194,151,225,127,235,203,234,120,226,
+162,114,42,73,224,146,2,28,137,249,212,177,42,239,170,44,199,76,132,214,87,244,221,78,
+204,8,92,53,29,245,73,69,114,127,127,121,213,178,192,199,25,204,191,9,136,212,218,220,
+145,242,97,177,170,109,242,219,171,58,159,66,46,2,237,250,44,183,196,167,44,164,244,75,
+58,14,218,120,89,210,41,138,88,218,174,166,6,98,206,104,117,67,223,36,132,193,160,215,
+86,236,15,46,175,218,21,201,7,187,213,180,30,238,222,29,226,124,84,72,242,232,198,136,
+177,31,196,147,102,49,165,172,183,75,209,132,107,11,41,175,132,14,55,148,88,168,231,170,
+125,89,85,105,187,164,158,171,171,22,162,218,151,77,241,36,151,4,44,136,21,174,80,173,
+194,184,225,222,98,144,120,166,217,201,135,84,159,151,147,7,243,137,183,138,169,56,202,70,
+180,206,129,151,215,155,6,241,72,178,113,73,57,159,232,166,146,33,145,72,68,146,84,33,
+65,175,29,141,62,51,147,16,169,71,167,72,116,112,85,152,68,171,200,61,101,85,70,229,
+231,17,2,163,246,22,43,202,146,89,211,133,235,171,26,195,217,172,226,168,179,5,155,165,
+112,191,81,221,20,145,95,212,180,83,68,93,209,116,16,117,13,93,13,101,239,65,222,139,
+33,67,17,90,196,99,17,137,100,127,183,18,228,158,138,225,168,173,108,127,40,215,145,159,
+233,52,183,197,116,179,244,65,81,181,114,26,24,230,179,205,136,95,23,79,147,46,9,152,
+108,72,39,7,201,22,130,252,144,169,94,37,75,118,95,154,4,46,141,51,30,104,64,76,
+249,73,158,166,78,153,108,196,155,131,196,34,255,120,105,170,254,27,130,192,68,28,112,1,
+137,80,238,50,2,130,177,165,199,58,84,102,219,131,95,201,79,175,219,55,218,63,169,221,
+111,182,19,139,252,244,165,80,146,94,227,67,141,60,57,44,173,75,163,37,99,191,55,186,
+248,236,131,230,240,136,158,189,179,51,239,142,113,164,255,247,168,233,45,207,15,193,86,98,
+101,192,226,115,182,119,212,109,61,51,169,13,46,230,191,65,62,167,243,61,5,76,212,20,
+209,242,195,20,148,243,209,94,175,219,63,160,41,223,242,83,49,69,21,103,180,158,178,93,
+122,10,69,199,196,31,149,56,243,208,133,130,240,222,142,94,154,39,215,41,48,240,63,254,
+110,232,15,41,14,172,30,132,57,193,8,132,32,109,200,233,238,74,24,110,219,118,221,221,
+239,93,24,131,155,86,108,224,122,232,186,149,7,55,149,141,83,137,214,77,65,23,134,8,
+183,76,172,0,117,154,195,90,121,79,70,63,24,138,183,194,164,90,91,125,132,172,185,228,
+12,212,92,160,214,94,78,73,219,22,106,15,218,20,101,82,197,73,188,101,156,227,49,43,
+64,34,236,86,244,128,69,55,88,116,168,45,179,240,25,240,96,147,200,149,86,213,74,4,
+233,45,193,214,146,21,210,120,212,59,106,169,184,146,243,165,14,88,203,7,241,122,29,234,
+103,8,80,74,90,83,95,211,137,37,229,177,145,132,158,198,142,46,24,120,33,5,220,223,
+63,45,99,230,170,35,38,249,177,19,29,131,109,118,191,95,2,31,43,134,135,162,81,42,
+180,92,196,5,88,60,22,219,21,250,218,121,126,223,17,215,4,53,173,8,73,75,71,167,
+79,1,171,165,214,237,90,42,73,30,162,214,119,69,131,139,156,157,161,44,50,12,199,42,
+231,236,226,105,57,89,15,139,212,160,49,20,53,154,229,208,34,137,232,70,87,22,251,163,
+31,190,127,167,188,227,187,201,207,88,16,247,77,106,207,158,250,225,164,121,89,235,147,57,
+109,209,134,238,183,174,218,43,217,171,218,232,199,173,91,154,186,189,211,253,108,120,159,109,
+205,98,230,141,192,2,46,221,112,17,80,162,26,169,162,14,121,183,35,247,69,244,223,76,
+12,17,42,130,54,96,90,23,8,73,97,150,54,73,95,196,62,140,41,188,46,177,15,154,
+173,118,175,219,237,106,115,148,199,201,53,77,231,207,233,152,89,180,70,229,2,245,231,57,
+14,175,214,78,82,70,111,84,31,78,39,79,201,101,247,74,116,12,61,109,143,184,241,44,
+250,110,121,220,235,19,99,229,46,162,249,26,186,225,244,121,203,52,14,31,254,74,181,143,
+54,2,161,254,136,254,109,147,114,11,79,68,40,178,81,80,116,44,5,64,81,239,246,224,
+58,39,113,108,47,45,158,136,223,2,83,183,238,239,11,179,80,190,13,215,174,176,240,67,
+48,125,248,205,167,35,141,164,122,80,156,208,169,173,157,18,83,170,168,40,234,61,117,162,
+174,62,178,181,106,121,147,156,180,242,49,130,200,159,44,104,3,129,4,37,111,254,244,90,
+143,144,122,229,88,115,103,97,171,16,155,198,76,34,254,149,78,127,203,8,77,15,82,154,
+57,238,245,239,239,75,125,4,61,85,29,207,234,153,85,237,189,167,127,76,0,209,131,196,
+232,245,141,63,10,193,164,2,238,22,216,89,46,26,223,226,251,76,168,104,106,79,196,87,
+27,158,56,58,3,243,51,210,64,61,42,21,101,231,74,95,174,133,109,110,21,100,23,155,
+132,34,243,237,202,59,78,83,38,15,123,83,241,161,137,56,151,85,31,67,128,177,252,132,
+22,219,148,200,79,74,54,63,109,253,172,61,83,7,150,187,122,36,149,136,175,162,250,207,
+44,189,75,119,197,246,109,157,11,189,70,123,181,110,149,130,127,46,123,158,31,253,135,95,
+51,47,213,249,147,99,35,210,133,109,244,14,13,253,153,82,57,131,126,134,144,242,8,121,
+171,140,165,72,161,143,169,119,197,137,34,209,202,243,81,113,144,156,31,130,203,56,97,103,
+201,226,225,215,153,95,74,241,117,45,110,158,87,11,99,220,161,79,221,48,113,151,35,10,
+252,212,153,194,74,54,66,33,61,211,192,167,224,189,237,9,67,204,37,174,102,200,82,190,
+173,28,21,153,123,178,129,97,230,231,69,159,124,48,180,218,121,196,179,222,113,48,163,15,
+111,116,176,220,98,17,185,142,30,126,67,229,172,190,139,50,74,95,94,234,79,114,160,181,
+79,180,4,143,7,182,239,47,87,91,149,83,164,126,89,145,81,34,211,159,206,53,115,95,
+16,40,176,40,151,68,22,67,26,163,127,254,33,207,147,143,247,228,191,131,253,95,229,95,
+87,63,24,59,0,0
+};
+// END GENERATED ADMIN UI
 
 static EspMQTTClient client(
   mqtt_host,
@@ -811,29 +1108,29 @@ static bool lastCommandSentPublished = false;
 static bool forceRescan = false;
 static bool overrideScan = false;
 //static char aBuffer[120];
-static const std::string ESPMQTTTopic = mqtt_main_topic + "/" + std::string(hostForControl);
-static const std::string ESPMQTTTopicMesh = mqtt_main_topic + "/" + std::string(hostForScan);
-static const std::string esp32Topic = ESPMQTTTopic + "/esp32";
-static const std::string rssiStdStr = esp32Topic + "/rssi";
-static const std::string lastWillStr = ESPMQTTTopic + "/lastwill";
-static const std::string lastWillScanStr = ESPMQTTTopicMesh + "/lastwill";
+static std::string ESPMQTTTopic = mqtt_main_topic + "/" + std::string(hostForControl);
+static std::string ESPMQTTTopicMesh = mqtt_main_topic + "/" + std::string(hostForScan);
+static std::string esp32Topic = ESPMQTTTopic + "/esp32";
+static std::string rssiStdStr = esp32Topic + "/rssi";
+static std::string lastWillStr = ESPMQTTTopic + "/lastwill";
+static std::string lastWillScanStr = ESPMQTTTopicMesh + "/lastwill";
 static const char* lastWill = lastWillStr.c_str();
 static const char* lastWillScan = lastWillScanStr.c_str();
-static const std::string botTopic = ESPMQTTTopic + "/bot/";
-static const std::string plugTopic = ESPMQTTTopic + "/plug/";
-static const std::string curtainTopic = ESPMQTTTopic + "/curtain/";
+static std::string botTopic = ESPMQTTTopic + "/bot/";
+static std::string plugTopic = ESPMQTTTopic + "/plug/";
+static std::string curtainTopic = ESPMQTTTopic + "/curtain/";
 static std::string meterTopic = ESPMQTTTopic + "/meter/";
 static std::string contactTopic = ESPMQTTTopic + "/contact/";
-static const std::string contactMainTopic = ESPMQTTTopic + "/contact/";
-static const std::string motionMainTopic = ESPMQTTTopic + "/motion/";
-static const std::string meterMainTopic = ESPMQTTTopic + "/meter/";
+static std::string contactMainTopic = ESPMQTTTopic + "/contact/";
+static std::string motionMainTopic = ESPMQTTTopic + "/motion/";
+static std::string meterMainTopic = ESPMQTTTopic + "/meter/";
 static std::string motionTopic = ESPMQTTTopic + "/motion/";
-static const std::string rescanStdStr = ESPMQTTTopic + "/rescan";
-static const std::string requestInfoStdStr = ESPMQTTTopic + "/requestInfo";
-static const std::string requestSettingsStdStr = ESPMQTTTopic + "/requestSettings";
-static const std::string setModeStdStr = ESPMQTTTopic + "/setMode";
-static const std::string setHoldStdStr = ESPMQTTTopic + "/setHold";
-static const std::string holdPressStdStr = ESPMQTTTopic + "/holdPress";
+static std::string rescanStdStr = ESPMQTTTopic + "/rescan";
+static std::string requestInfoStdStr = ESPMQTTTopic + "/requestInfo";
+static std::string requestSettingsStdStr = ESPMQTTTopic + "/requestSettings";
+static std::string setModeStdStr = ESPMQTTTopic + "/setMode";
+static std::string setHoldStdStr = ESPMQTTTopic + "/setHold";
+static std::string holdPressStdStr = ESPMQTTTopic + "/holdPress";
 //static StaticJsonDocument<120> aJsonDoc;
 
 struct to_lower {
@@ -889,7 +1186,21 @@ void addToAdvDevData(std::string aMac, long anRSSI, std::string aString, bool sh
   }
 }
 
+static bool adminTrial = false;
+static bool adminCleaning = false;
+static bool adminCleanupOK = true;
+static bool adminInterceptPublish(const std::string &topic) {
+  if (!adminCleaning) {
+    return adminTrial && topic.size() >= 7 && topic.compare(topic.size()-7,7,"/config")==0;
+  }
+  if (topic.size() >= 7 && topic.compare(topic.size()-7,7,"/config")==0) {
+    if (!client.publish(topic.c_str(),"",true)) adminCleanupOK=false;
+  }
+  return true;
+}
+
 void addToPublish(std::string aTopic, std::string aPayload, bool retain) {
+  if (adminInterceptPublish(aTopic)) return;
   bool queueIsFull = publishQueue.isFull();
   if (!queueIsFull) {
     struct QueuePublish aPublish;
@@ -901,6 +1212,7 @@ void addToPublish(std::string aTopic, std::string aPayload, bool retain) {
 }
 
 void addToPublish(std::string aTopic, const char * aPayload, bool retain) {
+  if (adminInterceptPublish(aTopic)) return;
   bool queueIsFull = publishQueue.isFull();
   if (!queueIsFull) {
     struct QueuePublish aPublish;
@@ -4343,7 +4655,196 @@ uint32_t getPassCRC(std::string & aDevice) {
 
 static ClientCallbacks clientCB;
 
+// BEGIN GENERATED ADMIN RUNTIME
+// Configuration is applied once, before WiFi, BLE and MQTT are started.
+static admin::Config adminConfig;
+static Preferences adminStore;
+static bool adminStorageOK=false, adminAP=false;
+static String adminToken, adminNotice, adminCandidate;
+static uint32_t adminBootAt=0, adminConnectedAt=0, adminRestartAt=0, adminAPAt=0;
+
+static String adminRandom() {
+  char value[33];
+  snprintf(value,sizeof(value),"%08lx%08lx%08lx%08lx",(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random(),(unsigned long)esp_random());
+  return String(value);
+}
+static void adminJson(int status,const JsonDocument &doc) {
+  String body;serializeJson(doc,body);
+  server.sendHeader("Cache-Control","no-store");
+  server.sendHeader("X-Content-Type-Options","nosniff");
+  server.send(status,"application/json; charset=utf-8",body);
+}
+static void adminError(int status,const char *message) {
+  StaticJsonDocument<256> doc;doc["error"]=message;adminJson(status,doc);
+}
+static bool adminAuthorized(bool write=false) {
+  if(!server.authenticate("admin",otaPass.c_str())) {server.requestAuthentication();return false;}
+  if(write && (adminToken.isEmpty() || server.header("X-CSRF-Token")!=adminToken)) {adminError(403,"Seite neu laden: Sitzung ungueltig.");return false;}
+  if(write && (adminTrial || adminRestartAt)) {adminError(409,"Neustart oder Verbindungspruefung laeuft.");return false;}
+  return true;
+}
+static void adminCollectDevices(std::map<std::string,std::string> &list,const char *type) {
+  for(const auto &item:list){admin::Device d;d.id=item.first;d.mac=admin::lowerMac(item.second);d.type=type;
+    if(d.type=="bot"){auto p=allPasswords.find(d.id);if(p!=allPasswords.end())d.password=p->second;auto t=allBotTypes.find(d.id);if(t!=allBotTypes.end())d.entity=t->second;}
+    adminConfig.devices.push_back(d);
+  }
+}
+static void adminCaptureDefaults() {
+  adminConfig.host=host;adminConfig.ssid=ssid;adminConfig.wifiPassword=password;
+  adminConfig.mqttHost=mqtt_host;adminConfig.mqttUser=mqtt_user?mqtt_user:"";adminConfig.mqttPassword=mqtt_pass?mqtt_pass:"";
+  adminConfig.port=mqtt_port;adminConfig.topic=mqtt_main_topic;
+  adminConfig.scanSeconds=initialScan;adminConfig.rescanSeconds=rescanTime;adminConfig.retries=noResponseRetryAmount;
+  adminConfig.staticAddress=useStaticIP;
+  adminConfig.ip=staticIP.toString().c_str();adminConfig.gateway=staticGateway.toString().c_str();adminConfig.subnet=staticSubnet.toString().c_str();adminConfig.dns=staticPrimaryDNS.toString().c_str();
+  adminCollectDevices(allBots,"bot");adminCollectDevices(allCurtains,"curtain");adminCollectDevices(allMeters,"meter");adminCollectDevices(allContactSensors,"contact");adminCollectDevices(allMotionSensors,"motion");adminCollectDevices(allPlugs,"plug");
+}
+static void adminApply() {
+  host=adminConfig.host.c_str();ssid=adminConfig.ssid.c_str();password=adminConfig.wifiPassword.c_str();
+  mqtt_host=adminConfig.mqttHost.c_str();mqtt_user=adminConfig.mqttUser.c_str();mqtt_pass=adminConfig.mqttPassword.c_str();mqtt_port=adminConfig.port;mqtt_main_topic=adminConfig.topic;
+  initialScan=adminConfig.scanSeconds;rescanTime=adminConfig.rescanSeconds;noResponseRetryAmount=adminConfig.retries;
+  useStaticIP=adminConfig.staticAddress;
+  staticIP.fromString(adminConfig.ip.c_str());staticGateway.fromString(adminConfig.gateway.c_str());staticSubnet.fromString(adminConfig.subnet.c_str());staticPrimaryDNS.fromString(adminConfig.dns.c_str());
+  allBots.clear();allCurtains.clear();allMeters.clear();allContactSensors.clear();allMotionSensors.clear();allPlugs.clear();allPasswords.clear();allBotTypes.clear();
+  for(const auto &d:adminConfig.devices){
+    auto *list=&allBots;if(d.type=="curtain")list=&allCurtains;else if(d.type=="meter")list=&allMeters;else if(d.type=="contact")list=&allContactSensors;else if(d.type=="motion")list=&allMotionSensors;else if(d.type=="plug")list=&allPlugs;
+    (*list)[d.id]=d.mac;if(d.type=="bot"){allPasswords[d.id]=d.password;allBotTypes[d.id]=d.entity;}
+  }
+  hostForControl=host;hostForScan=(meshHost==nullptr||strlen(meshHost)==0)?host:meshHost;
+  ESPMQTTTopic=mqtt_main_topic+"/"+hostForControl;ESPMQTTTopicMesh=mqtt_main_topic+"/"+hostForScan;
+  esp32Topic=ESPMQTTTopic+"/esp32";rssiStdStr=esp32Topic+"/rssi";
+  lastWillStr=ESPMQTTTopic+"/lastwill";lastWillScanStr=ESPMQTTTopicMesh+"/lastwill";lastWill=lastWillStr.c_str();lastWillScan=lastWillScanStr.c_str();
+  botTopic=ESPMQTTTopic+"/bot/";plugTopic=ESPMQTTTopic+"/plug/";curtainTopic=ESPMQTTTopic+"/curtain/";
+  meterTopic=ESPMQTTTopic+"/meter/";contactTopic=ESPMQTTTopic+"/contact/";motionTopic=ESPMQTTTopic+"/motion/";
+  meterMainTopic=meterTopic;contactMainTopic=contactTopic;motionMainTopic=motionTopic;
+  rescanStdStr=ESPMQTTTopic+"/rescan";requestInfoStdStr=ESPMQTTTopic+"/requestInfo";requestSettingsStdStr=ESPMQTTTopic+"/requestSettings";
+  setModeStdStr=ESPMQTTTopic+"/setMode";setHoldStdStr=ESPMQTTTopic+"/setHold";holdPressStdStr=ESPMQTTTopic+"/holdPress";
+  client.setMqttClientName(host);client.setMqttServer(mqtt_host,adminConfig.mqttUser.empty()?nullptr:mqtt_user,adminConfig.mqttUser.empty()?nullptr:mqtt_pass,mqtt_port);
+}
+static void adminStartAP() {
+  if(adminAP)return;
+  String name="SwitchBot-"+WiFi.macAddress().substring(12);name.replace(":","");
+  WiFi.mode(WIFI_AP_STA);adminAP=WiFi.softAP(name.c_str(),otaPass.c_str());adminAPAt=millis();
+  Serial.printf("Setup WiFi: %s\nSetup address: http://192.168.4.1\nAdmin user: admin\nAdmin password: %s\n",name.c_str(),otaPass.c_str());
+}
+static void adminLoad() {
+  adminCaptureDefaults();
+  adminStorageOK=adminStore.begin("sb-admin",false);
+  adminToken=adminRandom();
+  otaPass=adminStorageOK?adminStore.getString("password",""):String("");
+  if(otaPass.length()<12){otaPass=adminRandom().substring(0,20);if(adminStorageOK)adminStorageOK=adminStore.putString("password",otaPass)==otaPass.length();Serial.printf("Initial admin user: admin\nInitial admin password: %s\n",otaPass.c_str());}
+  String stored=adminStorageOK?adminStore.getString("active",""):String("");
+  if(stored.length()){
+    DynamicJsonDocument doc(12000);admin::Config loaded;std::string error;
+    if(!deserializeJson(doc,stored)&&admin::decode(doc.as<JsonVariantConst>(),adminConfig,loaded,error))adminConfig=loaded;
+    else adminNotice="Gespeicherte Konfiguration ungueltig; Startwerte geladen.";
+  }
+  if(adminStorageOK){
+    adminCandidate=adminStore.getString("pending","");
+    if(adminCandidate.length()){
+      if(adminStore.getBool("trying",false)){adminStore.remove("pending");adminStore.remove("trying");adminCandidate="";adminNotice="Vorherige Konfiguration nach abgebrochener Pruefung wiederhergestellt.";}
+      else {
+        DynamicJsonDocument doc(12000);admin::Config candidate;std::string error;
+        if(!deserializeJson(doc,adminCandidate)&&admin::decode(doc.as<JsonVariantConst>(),adminConfig,candidate,error)&&adminStore.putBool("trying",true)) {adminConfig=candidate;adminTrial=true;}
+        else {adminStore.remove("pending");adminCandidate="";adminNotice="Neue Konfiguration konnte nicht geladen werden.";}
+      }
+    }
+  }
+  adminApply();adminBootAt=millis();
+}
+static bool adminCleanupDiscovery() {
+  if(!client.isConnected())return false;
+  adminCleaning=true;adminCleanupOK=true;
+  publishHomeAssistantDiscoveryESPConfig();
+  for(auto &d:adminConfig.devices){
+    if(d.type=="bot")publishHomeAssistantDiscoveryBotConfig(d.id,d.mac,home_assistant_use_opt_mode);
+    else if(d.type=="curtain")publishHomeAssistantDiscoveryCurtainConfig(d.id,d.mac);
+    else if(d.type=="meter")publishHomeAssistantDiscoveryMeterConfig(d.id,d.mac);
+    else if(d.type=="contact")publishHomeAssistantDiscoveryContactConfig(d.id,d.mac);
+    else if(d.type=="motion")publishHomeAssistantDiscoveryMotionConfig(d.id,d.mac);
+    else if(d.type=="plug")publishHomeAssistantDiscoveryPlugConfig(d.id,d.mac,home_assistant_use_opt_mode);
+  }
+  adminCleaning=false;
+  return adminCleanupOK;
+}
+static void adminRoutes() {
+  const char *headers[]={"X-CSRF-Token"};server.collectHeaders(headers,1);
+  server.on("/api/config",HTTP_GET,[](){
+    if(!adminAuthorized())return;
+    DynamicJsonDocument doc(12000),redacted(10000);admin::encode(redacted,adminConfig,false);
+    doc["config"]=redacted.as<JsonObject>();doc["csrf"]=adminToken;doc["trial"]=adminTrial;adminJson(200,doc);
+  });
+  server.on("/api/status",HTTP_GET,[](){
+    if(!adminAuthorized())return;
+    StaticJsonDocument<768> doc;doc["wifi"]=WiFi.status()==WL_CONNECTED;doc["mqtt"]=client.isConnected();doc["ip"]=WiFi.localIP().toString();doc["uptime"]=millis()/1000;doc["heap"]=ESP.getFreeHeap();doc["devices"]=adminConfig.devices.size();doc["ap"]=adminAP;doc["trial"]=adminTrial;doc["notice"]=adminNotice;adminJson(200,doc);
+  });
+  server.on("/api/config",HTTP_POST,[](){
+    if(!adminAuthorized(true))return;
+    if(!adminStorageOK){adminError(507,"Konfigurationsspeicher nicht verfuegbar.");return;}
+    String body=server.arg("plain");if(body.length()>7000){adminError(413,"Konfiguration zu gross.");return;}
+    DynamicJsonDocument doc(12000);admin::Config next;std::string error;
+    if(deserializeJson(doc,body)){adminError(400,"JSON ungueltig.");return;}
+    if(!admin::decode(doc.as<JsonVariantConst>(),adminConfig,next,error)){adminError(400,error.c_str());return;}
+    const bool knownDiscovery=!adminConfig.devices.empty()||adminStore.getBool("hadBroker",false)||client.getConnectionEstablishedCount()>0;
+    const bool cleanup=home_assistant_mqtt_discovery&&knownDiscovery&&admin::cleanupNeeded(adminConfig,next);
+    if(cleanup&&!client.isConnected()){adminError(409,"Bisherigen MQTT-Broker verbinden, bevor Geraete, Broker oder Topic geaendert werden.");return;}
+    if(cleanup&&(enableMesh||isMeshNode)){adminError(409,"Geraete-/Topic-Wechsel im Mesh erfordert koordinierte Discovery-Bereinigung.");return;}
+    admin::encode(doc,next,true);String serialized;serializeJson(doc,serialized);
+    if(doc.overflowed()||serialized.length()>3500){adminError(413,"Konfiguration zu gross fuer den sicheren Rollback-Speicher (3500 Bytes).");return;}
+    // Save the previous settings on first use, including compiled-in credentials.
+    if(!adminStore.isKey("active")){
+      DynamicJsonDocument previous(12000);admin::encode(previous,adminConfig,true);String backup;serializeJson(previous,backup);
+      if(previous.overflowed()||backup.length()>3500||adminStore.putString("active",backup)!=backup.length()){adminError(507,"Vorherige Konfiguration konnte nicht gesichert werden.");return;}
+    }
+    if(adminStore.isKey("trying")&&!adminStore.remove("trying")){adminError(507,"Teststatus konnte nicht zurueckgesetzt werden.");return;}
+    if(adminStore.putString("pending",serialized)!=serialized.length()){adminError(507,"Konfiguration konnte nicht gespeichert werden.");return;}
+    if(cleanup&&!adminCleanupDiscovery()){adminStore.remove("pending");discoveredDevices.clear();adminError(503,"Discovery-Bereinigung fehlgeschlagen. Erneut versuchen.");return;}
+    client.publish(lastWill,"offline",true);
+    StaticJsonDocument<256> result;result["message"]="Gespeichert. Neustart und Verbindungstest laufen. Nach etwa 90 Sekunden Seite neu laden; bei Fehlern gilt wieder die vorherige Konfiguration.";adminJson(200,result);adminRestartAt=millis()+1500;
+  });
+  server.on("/api/test",HTTP_POST,[](){
+    if(!adminAuthorized(true))return;
+    StaticJsonDocument<128> doc;if(deserializeJson(doc,server.arg("plain"))||!doc["id"].is<const char*>()){adminError(400,"Geraet fehlt.");return;}
+    std::string id=doc["id"].as<std::string>();bool found=false;for(const auto &d:adminConfig.devices)if(d.id==id)found=true;
+    if(!found){adminError(404,"Geraet zuerst speichern.");return;}
+    if(!client.isConnected()||!initialScanComplete||commandQueue.isFull()){adminError(409,"Bridge noch nicht bereit oder Warteschlange voll.");return;}
+    QueueCommand command;command.device=id;command.topic=ESPMQTTTopic+"/control";command.payload="REQUESTINFO";command.currentTry=1;command.priority=false;command.disconnectAfter=true;commandQueue.enqueue(command);
+    server.send(202,"application/json","{}");
+  });
+  server.on("/api/password",HTTP_POST,[](){
+    if(!adminAuthorized(true))return;
+    StaticJsonDocument<192> doc;if(deserializeJson(doc,server.arg("plain"))||!doc["password"].is<const char*>()){adminError(400,"Passwort fehlt.");return;}
+    String value=doc["password"].as<String>();if(value.length()<12||value.length()>63){adminError(400,"Admin-Passwort: 12–63 Zeichen.");return;}
+    if(!adminStorageOK||adminStore.putString("password",value)!=value.length()){adminError(507,"Passwort konnte nicht gespeichert werden.");return;}
+    otaPass=value;server.send(200,"application/json","{}");
+  });
+  server.on("/api/restart",HTTP_POST,[](){if(!adminAuthorized(true))return;server.send(200,"application/json","{}");adminRestartAt=millis()+1000;});
+}
+static bool adminTick() {
+  if(adminRestartAt){if(static_cast<int32_t>(millis()-adminRestartAt)>=0)ESP.restart();return true;}
+  if(adminTrial){
+    if(client.isConnected()){
+      if(!adminConnectedAt)adminConnectedAt=millis();
+      if(millis()-adminConnectedAt>=5000){
+        if(adminStore.putString("active",adminCandidate)==adminCandidate.length()){
+          adminStore.remove("pending");adminStore.remove("trying");adminCandidate="";adminTrial=false;adminNotice="Neue Konfiguration erfolgreich verbunden und uebernommen.";
+          publishHomeAssistantDiscoveryESPConfig();
+        } else {adminNotice="Speichern fehlgeschlagen; vorherige Konfiguration wird geladen.";adminRestartAt=millis()+1000;}
+      }
+    } else adminConnectedAt=0;
+    if(adminTrial&&millis()-adminBootAt>=75000){adminNotice="Verbindungspruefung fehlgeschlagen. Rollback laeuft.";adminRestartAt=millis()+1000;}
+    return true;
+  }
+  if(WiFi.status()!=WL_CONNECTED&&millis()-adminBootAt>60000)adminStartAP();
+  if(adminStorageOK&&client.isConnected()&&!adminStore.getBool("hadBroker",false))adminStore.putBool("hadBroker",true);
+  if(adminAP&&WiFi.status()==WL_CONNECTED&&millis()-adminAPAt>600000){WiFi.softAPdisconnect(true);WiFi.mode(WIFI_STA);adminAP=false;}
+  return false;
+}
+// END GENERATED ADMIN RUNTIME
+
 void setup () {
+  Serial.begin(115200);
+  pinMode(0, INPUT_PULLUP);
+  adminLoad();
 
   if (ledHighEqualsON) {
     ledONValue = HIGH;
@@ -4385,6 +4886,17 @@ void setup () {
   WiFi.setHostname(host);
   WiFi.setAutoReconnect(true);
   WiFi.begin(ssid, password);
+  Serial.println("Admin setup: hold BOOT for 3 seconds now to open recovery WiFi.");
+  delay(500);
+  const uint32_t buttonAt=millis();
+  while(digitalRead(0)==LOW && millis()-buttonAt<3000) delay(10);
+  if(digitalRead(0)==LOW) {
+    otaPass=adminRandom().substring(0,20);
+    if(adminStorageOK) adminStore.putString("password",otaPass);
+    adminStartAP();
+  }
+  if(adminConfig.ssid=="SSID" || adminConfig.ssid.empty()) adminStartAP();
+  adminRoutes();
   printAString("");
 
   // Wait for connection
@@ -4416,24 +4928,22 @@ void setup () {
     }*/
   /*return index page which is stored in serverIndex */
   server.on("/", HTTP_GET, []() {
-    server.sendHeader("Connection", "close");
-    if (useLoginScreen) {
-      if (!server.authenticate(otaUserId.c_str(), otaPass.c_str())) {
-        return server.requestAuthentication();
-      }
-    }
-    server.send(200, "text/html", serverIndex);
+    if(!adminAuthorized()) return;
+    server.sendHeader("Cache-Control","no-store");
+    server.sendHeader("Content-Encoding","gzip");
+    server.sendHeader("X-Frame-Options","DENY");
+    server.sendHeader("Content-Security-Policy","default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'");
+    server.send_P(200,"text/html; charset=utf-8",reinterpret_cast<const char *>(adminPage),sizeof(adminPage));
   });
   static bool otaUploadAuthorized = false;
   static bool otaUploadSucceeded = false;
   /*handling uploading firmware file */
   server.on("/update", HTTP_POST, []() {
     server.sendHeader("Connection", "close");
-    if (useLoginScreen) {
-      if (!server.authenticate(otaUserId.c_str(), otaPass.c_str())) {
-        return server.requestAuthentication();
-      }
+    if (!server.authenticate("admin", otaPass.c_str())) {
+      return server.requestAuthentication();
     }
+    if(server.header("X-CSRF-Token") != adminToken) { adminError(403,"Sitzung ungueltig."); return; }
     const bool succeeded = otaUploadAuthorized && otaUploadSucceeded;
     otaUploadAuthorized = false;
     otaUploadSucceeded = false;
@@ -4445,7 +4955,7 @@ void setup () {
     HTTPUpload& upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
       otaUploadSucceeded = false;
-      otaUploadAuthorized = !useLoginScreen || server.authenticate(otaUserId.c_str(), otaPass.c_str());
+      otaUploadAuthorized = !adminTrial && !adminRestartAt && server.header("X-CSRF-Token") == adminToken && server.authenticate("admin", otaPass.c_str());
     }
     if (!otaUploadAuthorized) {
       return;
@@ -4930,6 +5440,7 @@ void loop () {
   client.loop();
   checkWebServer();
   server.handleClient();
+  if(adminTick()) return;
   //printAString("at processAllAdvData...");
   processAllAdvData();
   //printAString("at publishLastwillOnline...");

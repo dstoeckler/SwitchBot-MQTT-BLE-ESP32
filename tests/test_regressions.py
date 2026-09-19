@@ -52,16 +52,22 @@ enum { HTTP_POST, UPLOAD_FILE_START, UPLOAD_FILE_WRITE, UPLOAD_FILE_END, UPLOAD_
 struct HTTPUpload { int status = 0; String filename = "firmware.bin"; unsigned char buf[4] = {}; size_t currentSize = 4; size_t totalSize = 4; };
 struct Server {
   bool authorized = false;
+  String token="valid";
   int status = 0;
   HTTPUpload data;
   std::function<void()> completed, chunk;
   void on(const char *, int, std::function<void()> a, std::function<void()> b) { completed=a; chunk=b; }
   bool authenticate(const char *, const char *) { return authorized; }
+  String header(const char *) { return token; }
   void requestAuthentication() { status=401; }
   void sendHeader(const char *, const char *) {}
   void send(int code, const char *, const char *) { status=code; }
   HTTPUpload& upload() { return data; }
 } server;
+void adminError(int code,const char *) { server.status=code; }
+bool adminTrial=false;
+unsigned long adminRestartAt=0;
+String adminToken="valid";
 struct Updater {
   int starts=0, writes=0, ends=0, aborts=0;
   bool success=true;
@@ -170,6 +176,12 @@ int main() {
   int starts=Update.starts;
   upload(UPLOAD_FILE_START); upload(UPLOAD_FILE_WRITE); upload(UPLOAD_FILE_END); server.completed();
   assert(Update.starts==starts && server.status==401 && ESP.reboots==1);
+  server.authorized=true;server.token="wrong";
+  upload(UPLOAD_FILE_START);upload(UPLOAD_FILE_WRITE);upload(UPLOAD_FILE_END);server.completed();
+  assert(Update.starts==starts && server.status==403 && ESP.reboots==1);
+  server.token="valid";adminTrial=true;
+  upload(UPLOAD_FILE_START);upload(UPLOAD_FILE_WRITE);upload(UPLOAD_FILE_END);server.completed();
+  assert(Update.starts==starts && ESP.reboots==1);
 }
 '''
         compiler = shutil.which('g++')
