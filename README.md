@@ -1,3 +1,8 @@
+# Be aware, I only fixed some issues with vibe code #
+
+original Author:
+   devWaves
+
 ## SwitchBot-MQTT-BLE-ESP32 ##
 
 Local fork: see [hardening changes, supported builds and validation](docs/validation.md).
