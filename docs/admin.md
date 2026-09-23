@@ -1,63 +1,63 @@
-# Admin-Oberfläche
+# Admin interface
 
-Die Bridge stellt unter `http://<ESP32-IP>/` eine vollständig lokale Oberfläche bereit. Es werden keine externen Skripte oder Cloud-Dienste geladen. Konfigurationsänderungen gelten nach einem kontrollierten Neustart.
+The bridge provides a fully local interface at `http://<ESP32-IP>/`. No external scripts or cloud services are loaded. Configuration changes take effect only after a controlled restart.
 
-## Einmalige Installation und Anmeldung
+## One-time installation and first access
 
-1. Den passenden klassischen ESP32 mit mindestens **4 MB Flash** auswählen. Die geprüften PlatformIO-Ziele sind `esp32dev` und `m5stack-atom`.
-2. **Den ersten Wechsel von der alten Firmware per USB durchführen**, nicht über das bisherige OTA-Formular. Das neue Layout hat zwei OTA-Slots mit jeweils `0x1e0000` Bytes. Die neue Firmware passt nicht mehr in die bisherigen Standard-Slots. PlatformIO schreibt beim normalen USB-Upload auch die neue Partitionstabelle. Die vorhandene NVS-Region bleibt an gleicher Adresse.
-3. Seriellen Monitor mit 115200 Baud öffnen. Beim ersten Start werden der Benutzer `admin` und ein zufälliges, gerätespezifisches Admin-Passwort angezeigt. Es gibt kein gemeinsames Standardpasswort.
-4. Die IP der Bridge im Browser öffnen. Standardmäßig ist keine Anmeldung erforderlich. Sind noch die WLAN-Platzhalter gesetzt, startet direkt das geschützte WLAN `SwitchBot-XXXX`; alternativ startet es nach 60 Sekunden ohne WLAN-Verbindung. Dessen Passwort ist das Admin-Passwort; Oberfläche: `http://192.168.4.1/`.
-5. WLAN, MQTT und Geräte eintragen, speichern und den Verbindungstest abwarten. Danach die neue IP im Router nachsehen und die Seite neu laden.
+1. Use a compatible classic ESP32 with at least **4 MB flash**. Verified PlatformIO targets are `esp32dev` and `m5stack-atom`.
+2. **Do the first migration from old firmware over USB**, not through the previous OTA form. The new layout uses two OTA slots of `0x1e0000` bytes each. The new firmware does not fit into the old default slots. A normal PlatformIO USB upload also writes the new partition table. The existing NVS region stays at the same address.
+3. Open the serial monitor at 115200 baud. On first boot, the firmware prints user `admin` and a random device-specific admin password. There is no shared default password.
+4. Open the bridge IP in your browser. By default, no web login is required. If Wi-Fi placeholders are still present, the protected setup Wi-Fi `SwitchBot-XXXX` starts immediately; alternatively, it starts after 60 seconds without Wi-Fi connectivity. Its password is the admin password. Interface URL: `http://192.168.4.1/`.
+5. Enter Wi-Fi, MQTT and device settings, save, and wait for the connectivity test. Then find the new IP in your router and reload the page.
 
 ```powershell
 python -m platformio run -d "PlatformIO Files/SwitchBot-BLE2MQTT-ESP32" -e esp32dev
-# Erst nach Anschluss und Auswahl des passenden Boards/Ports ausführen:
+# Run only after connecting the board and selecting the correct board/port:
 python -m platformio run -d "PlatformIO Files/SwitchBot-BLE2MQTT-ESP32" -e esp32dev -t upload
 ```
 
-Die Arduino-IDE-Datei enthält die gesamte Oberfläche und Konfigurationslogik. Für einen Arduino-IDE-Build muss dieselbe Partitionstabelle gewählt/eingebunden werden (`PlatformIO Files/SwitchBot-BLE2MQTT-ESP32/partitions-admin.csv`). Dieser Installationsweg ist nicht automatisiert geprüft; PlatformIO ist der verifizierte Buildweg. Nach der USB-Migration funktionieren weitere passende Firmwareupdates wieder über die neue Oberfläche.
+The Arduino IDE file contains the full interface and configuration logic. For Arduino IDE builds, you must use the same partition table (`PlatformIO Files/SwitchBot-BLE2MQTT-ESP32/partitions-admin.csv`). This installation path is not automatically verified; PlatformIO is the verified build path. After USB migration, later compatible firmware updates can again be done through the new interface.
 
-## Sprache
+## Language
 
-Im Kopfbereich kann zwischen **Deutsch** und **English** gewechselt werden. Beim ersten Besuch wird die Browsersprache verwendet: Deutsch bei `de`, ansonsten Englisch. Die Auswahl wird lokal im Browser gespeichert. Ungespeicherte Formulareingaben bleiben beim Umschalten erhalten. Statusanzeigen, Dialoge und Fehlermeldungen wechseln ebenfalls die Sprache. Es werden keine Übersetzungsdienste kontaktiert.
+The header lets you switch between **Deutsch** and **English**. On first visit, browser language is used: German for `de`, otherwise English. The choice is stored locally in the browser. Unsaved form inputs are preserved when switching. Status cards, dialogs and error messages also switch language. No translation services are contacted.
 
-## Einstellungen
+## Settings
 
-- WLAN-SSID, Passwort, DHCP oder statische IPv4-Adresse einschließlich Gateway, Maske und DNS.
-- Bridge-Hostname sowie MQTT-Broker, Port, Benutzer, Passwort und Basistopic. Kein Benutzer bedeutet anonyme MQTT-Anmeldung. Die Verbindung verwendet wie bisher unverschlüsseltes MQTT.
-- Bis zu **16 Geräte**: bestehende Typen Bot, Curtain, Meter, Contact, Motion und Plug Mini. Namen/MAC-Adressen müssen eindeutig sein. Bot-Passwörter und HA-Darstellung als Schalter, Taster oder Licht können geändert werden.
-- Initiale Scan-Dauer, Rescan-Intervall und Retry-Anzahl. Weitere Expertenoptionen bleiben im Quellcode.
-- Statusabfrage für bereits gespeicherte Geräte, ohne Betätigen des Bots.
-- JSON-Export und -Import, Admin-Passwortwechsel, Neustart und OTA-Upload.
+- Wi-Fi SSID/password, DHCP or static IPv4 with gateway, subnet mask and DNS.
+- Bridge hostname, plus MQTT broker, port, username, password and base topic. Empty username means anonymous MQTT login. MQTT remains unencrypted.
+- Up to **16 devices**: Bot, Curtain, Meter, Contact, Motion and Plug Mini. Names/MAC addresses must be unique. Bot passwords and Home Assistant entity type (switch/button/light) can be changed.
+- Initial scan duration, rescan interval and retry count. Further expert options remain in source.
+- Status request for already saved devices, without actuating a Bot.
+- JSON export/import, admin password change, restart and OTA upload.
 
-Die Namen werden auch in MQTT-Topics verwendet. Umbenennen ist daher eine Änderung der Topic-Adresse. Die Oberfläche lässt nur einfache Namen mit Buchstaben, Zahlen, Bindestrichen oder Unterstrichen zu. Die gesamte gespeicherte JSON-Konfiguration ist auf **3500 Bytes** begrenzt, damit aktive und neue Konfiguration gemeinsam in der bisherigen NVS-Partition gespeichert werden können. Sehr lange Zugangsdaten können die maximal mögliche Gerätezahl reduzieren.
+Device names are also used in MQTT topics. Renaming therefore changes topic addresses. The interface only accepts simple names with letters, digits, hyphens or underscores. Stored JSON configuration is limited to **3500 bytes** so active and candidate configurations can be stored together in the existing NVS partition. Very long credentials can reduce maximum device count.
 
-## Passwörter
+## Passwords
 
-API-Antworten und Exporte enthalten **keine gespeicherten Passwörter**. Ein leeres Eingabefeld behält das bisherige Passwort; die Checkbox zum Entfernen setzt es ausdrücklich leer. Bei importierten Geräten werden vorhandene Bot-Passwörter nur bei identischer MAC und identischem Typ übernommen, auch wenn sich der Name ändert. Auf einem anderen ESP32 müssen die Zugangsdaten neu eingegeben werden.
+API responses and exports contain **no stored passwords**. Leaving a password field empty keeps the existing password; the remove checkbox explicitly clears it. For imported devices, existing Bot passwords are retained only when MAC and type match, even if the name changed. On a different ESP32, credentials must be entered again.
 
-Der Passwortschutz ist standardmäßig ausgeschaltet, auch nach einem Update von einer Version ohne diese Option. Unter Administration „Passwortschutz aktivieren“ auswählen, ein Passwort mit 12–63 Zeichen zweimal eingeben und „Passwortschutz speichern“ drücken. Der Benutzername lautet `admin`. Die Einstellung bleibt nach Neustarts erhalten und schützt Oberfläche, API und OTA. Zum Abschalten das Häkchen entfernen und speichern. Schreibende Aufrufe benötigen in beiden Modi einen zufälligen Sitzungstoken. Das Passwort des Einrichtungs-WLANs bleibt weiterhin erforderlich. HTTP Basic ist kein HTTPS. Deshalb nur im vertrauenswürdigen lokalen Netzwerk betreiben und keine öffentliche Portweiterleitung einrichten. NVS speichert Zugangsdaten im Gerätespeicher; physischer Zugriff ist dadurch nicht abgewehrt. Die alten `otaPass`-/`otaUserId`-Startwerte sind kein Zugang mehr zur Admin-Oberfläche.
+Password protection is off by default, including after updating from firmware without this option. Under Administration, enable password protection, enter a password with 12–63 characters twice, and click save. Username is `admin`. The setting persists across restarts and protects interface, API and OTA. To disable it, clear the checkbox and save. Write operations require a random session token in both modes. The setup Wi-Fi password is still required. HTTP Basic is not HTTPS, so use only on trusted local networks without public port forwarding. NVS stores credentials in device flash; physical access is not mitigated. Legacy `otaPass`/`otaUserId` defaults no longer grant access to the admin interface.
 
-## Speichern, Test und Rollback
+## Save, test and rollback
 
-Die aktive Konfiguration bleibt beim Speichern erhalten. Die neue Konfiguration wird separat geschrieben und nach dem Neustart getestet. **WLAN und MQTT müssen innerhalb von 75 Sekunden erreichbar sein und die MQTT-Verbindung mindestens fünf Sekunden stehen.** Während der Prüfung ist BLE-Verarbeitung angehalten; Konfigurationsänderungen und OTA sind gesperrt. Erst nach erfolgreicher Prüfung ersetzt der Kandidat die aktive Konfiguration.
+Active configuration stays in place when saving. The new configuration is written separately and tested after restart. **Wi-Fi and MQTT must be reachable within 75 seconds, and MQTT must stay connected for at least five seconds.** During this test, BLE processing pauses and config changes/OTA are blocked. Only a successful test promotes the candidate to active configuration.
 
-Scheitert die Prüfung, das Schreiben oder wird der ESP32 während der Prüfung zurückgesetzt, startet er wieder mit der vorherigen Konfiguration. Bei schlechtem WLAN oder absichtlich abgeschaltetem Broker kann deshalb auch eine ansonsten korrekte Änderung zurückgerollt werden. Statusanzeigen und die Oberfläche müssen nach dem Neustart neu geladen werden.
+If testing or writing fails, or if the ESP32 is reset during test, it boots with the previous configuration. With weak Wi-Fi or intentionally disabled broker, even an otherwise valid change can be rolled back. Reload status and interface after restart.
 
-Vor Änderungen an Geräten, Topic oder Broker werden die alten HA-Discovery-Einträge über den bisherigen Broker entfernt. Wenn bereits Geräte/Discovery existieren, muss dieser erreichbar sein. Das Löschen nutzt MQTT QoS 0 und ist deshalb keine transaktionale Garantie bei einem gleichzeitigen Netzwerkausfall. Historische fremde/orphaned Topics außerhalb der aktuellen Konfiguration werden nicht pauschal gelöscht. Neue Discovery wird erst nach erfolgreicher Konfigurationsprüfung veröffentlicht; bei Rollback wird die alte wieder veröffentlicht.
+Before changing devices, topic or broker, old Home Assistant discovery entries are deleted through the previous broker. If devices/discovery already exist, that broker must be reachable. Cleanup uses MQTT QoS 0 and is therefore not transactional under simultaneous network loss. Historical orphan topics outside the current configuration are not deleted globally. New discovery is published only after successful config test; on rollback, old discovery is republished.
 
-**Mesh-Grenze:** Geräte-, Broker- und Topic-Wechsel sind im Mesh gesperrt, da Discovery und Topics gemeinsam verwendet werden können. WLAN und Abfrageparameter bleiben konfigurierbar. Änderungen an mehreren Mesh-Knoten benötigen weiterhin eine koordinierte Migration.
+**Mesh limitation:** Device, broker and topic changes are blocked on mesh nodes because discovery/topics can be shared. Wi-Fi and polling parameters remain configurable. Multi-node mesh changes still require coordinated migration.
 
-## Zugang wiederherstellen
+## Recover access
 
-Seriellen Monitor öffnen und neu starten. **BOOT unmittelbar nach dem Start gedrückt halten**, wenn die Meldung `Admin setup: hold BOOT ...` erscheint; drei Sekunden halten. Nicht schon beim Einschalten halten, sonst kann der ROM-Flashmodus starten. Die Firmware erzeugt ein neues Admin-Passwort, zeigt es seriell an und öffnet das geschützte Einrichtungs-WLAN. Die Gerätekonfiguration wird dabei nicht gelöscht.
+Open serial monitor and reset. **Hold BOOT immediately after startup** when `Admin setup: hold BOOT ...` appears; hold for three seconds. Do not hold BOOT before power-on, or ROM flashing mode may start instead. Firmware generates a new admin password, prints it to serial, and opens protected setup Wi-Fi. Device configuration is not erased.
 
-Ohne WLAN startet der geschützte Zugang nach 60 Sekunden automatisch. Ist WLAN wieder verbunden, wird der Zugang nach zehn Minuten geschlossen. Der BOOT-Einrichtungsmodus verwendet GPIO0; bei Boards ohne diese Taste muss GPIO0 nach dem Start entsprechend geschaltet werden.
+Without Wi-Fi, protected setup access starts automatically after 60 seconds. Once Wi-Fi reconnects, setup access closes after ten minutes. BOOT setup mode uses GPIO0; for boards without that button, GPIO0 must be toggled accordingly after boot.
 
-## Entwicklung und Prüfung
+## Development and checks
 
-`admin/index.html`, `admin/i18n.js`, `admin/translations.json`, `admin/config_core.h`, `admin/config_json.h` und `admin/runtime.inc` sind die bearbeitbaren Quellen. Anschließend `python tools/sync_admin.py` ausführen: Die komprimierte Oberfläche und der C++-Code werden in beide eigenständig nutzbaren Firmwaredateien eingebettet. Nicht direkt in den generierten Bereichen ändern.
+`admin/index.html`, `admin/i18n.js`, `admin/translations.json`, `admin/config_core.h`, `admin/config_json.h` and `admin/runtime.inc` are editable sources. Then run `python tools/sync_admin.py`: compressed UI and C++ code are embedded into both standalone firmware files. Do not edit generated sections directly.
 
 ```
 python tools/sync_admin.py --check
@@ -66,8 +66,8 @@ python -m unittest discover -s tests -v
 python tools/preview_admin.py
 ```
 
-Die Vorschau unter `http://127.0.0.1:8765` simuliert API-Antworten und verändert keine Hardware. Die Codec-/Rollback-Tests benötigen die durch PlatformIO installierten ArduinoJson-Header; ohne sie werden diese Tests ausdrücklich übersprungen. In CI laufen sie zusätzlich nach dem Firmwarebuild.
+The preview at `http://127.0.0.1:8765` simulates API responses and does not change hardware. Codec/rollback tests need ArduinoJson headers installed by PlatformIO; without them these tests are explicitly skipped. CI also runs them after firmware build.
 
-Vor Einsatz auf dem Gerät prüfen: USB-Migration, erster Login, physische Zugangswiederherstellung, absichtlich falsche WLAN-/MQTT-Zugangsdaten, Stromunterbrechung während des Tests, erfolgreiche Übernahme nach Neustart, Discovery nach Umbenennen/Löschen sowie erfolgreicher OTA-Wechsel zwischen beiden Slots. Diese Hardwaretests wurden bei der Entwicklung ohne angeschlossenen ESP32 nicht ausgeführt.
+Before deployment on real hardware, validate: USB migration, first login, physical access recovery, intentionally wrong Wi-Fi/MQTT credentials, power interruption during test, successful post-restart promotion, discovery after rename/delete, and successful OTA switching between both slots. These hardware tests were not executed during development without a connected ESP32.
 
-Prüfstand vom 19.09.2026: Beide PlatformIO-Ziele bauen erfolgreich (jeweils rund 1,33 MB, 67,6 % des OTA-Slots). Alle fünf Tests bestehen unter Windows und Linux, einschließlich Codec, Authentifizierung und simuliertem persistentem Rollback. In der Browser-Vorschau wurden Laden, Hinzufügen, Typwechsel, Löschen, Speichern und JSON-Import geprüft; dabei traten keine JavaScript-Konsolenfehler auf. Die Vorschau ersetzt keine Prüfung der Verbindungen auf echter Hardware.
+Test bench (2026-09-19): Both PlatformIO targets build successfully (about 1.33 MB each, 67.6% of OTA slot). All five tests pass on Windows and Linux, including codec, authentication and simulated persistent rollback. Browser preview covered load/add/type-change/delete/save/JSON import with no JavaScript console errors. Preview is not a substitute for real hardware connectivity validation.
