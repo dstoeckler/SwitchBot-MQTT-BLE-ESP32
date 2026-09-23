@@ -1,0 +1,47 @@
+name: Firmware Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++
+          python -m pip install --upgrade pip
+          python -m pip install platformio==6.1.19
+
+      - name: Verify admin source sync
+        run: python tools/sync_admin.py --check
+
+      - name: Build firmware
+        run: python -m platformio run -d "PlatformIO Files/SwitchBot-BLE2MQTT-ESP32" -e esp32dev -e m5stack-atom
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: |
+            PlatformIO Files/SwitchBot-BLE2MQTT-ESP32/.pio/build/esp32dev/firmware.bin
+            PlatformIO Files/SwitchBot-BLE2MQTT-ESP32/.pio/build/m5stack-atom/firmware.bin
+          if-no-files-found: error
