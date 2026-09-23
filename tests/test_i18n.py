@@ -39,8 +39,17 @@ const assert = require('node:assert/strict');
 const source = SOURCE;
 function context(browserLanguage, saved, blocked = false) {
   const c = vm.createContext({
-    navigator: {language: browserLanguage},
+    navigator: {language: browserLanguage, languages: browserLanguage ? [browserLanguage] : []},
     localStorage: {getItem() {if (blocked) throw Error('blocked'); return saved;}},
+    document: {getElementById() {return {};}}
+  });
+  vm.runInContext(source, c);
+  return c;
+}
+function contextWithLanguages(browserLanguage, browserLanguages, saved) {
+  const c = vm.createContext({
+    navigator: {language: browserLanguage, languages: browserLanguages},
+    localStorage: {getItem() {return saved;}},
     document: {getElementById() {return {};}}
   });
   vm.runInContext(source, c);
@@ -51,12 +60,15 @@ assert.equal(vm.runInContext('language', en), 'en');
 assert.equal(vm.runInContext("t('Übersicht')", en), 'Overview');
 assert.equal(vm.runInContext("t('Textfeld fehlt: ssid')", en), 'Missing text field: ssid');
 assert.equal(vm.runInContext("t('Verbindung fehlgeschlagen: Passwort fehlt.')", en), 'Connection failed: Password missing.');
+assert.equal(vm.runInContext("t('Verbindungsprüfung fehlgeschlagen. Rollback läuft.')", en), 'Connection check failed. Restoring the previous configuration.');
 assert.equal(vm.runInContext("t('custom-device')", en), 'custom-device');
 assert.equal(vm.runInContext('t(42)', en), 42);
 assert.equal(vm.runInContext('language', context('de-AT', null)), 'de');
 assert.equal(vm.runInContext('language', context('fr-FR', null)), 'en');
+assert.equal(vm.runInContext('language', contextWithLanguages('fr-FR', ['fr-FR', 'de-DE'], null)), 'de');
 assert.equal(vm.runInContext('language', context('de-AT', 'en')), 'en');
 assert.equal(vm.runInContext('language', context('en-US', 'de')), 'de');
+assert.equal(vm.runInContext('language', context('en-US', 'de-DE')), 'de');
 assert.equal(vm.runInContext('language', context('de-AT', 'invalid')), 'de');
 assert.equal(vm.runInContext('language', context('en-US', null, true)), 'en');
 assert.equal(vm.runInContext("t('Übersicht')", context('en-US', 'de')), 'Übersicht');
