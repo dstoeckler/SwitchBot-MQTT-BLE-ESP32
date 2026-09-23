@@ -15,7 +15,7 @@ The final independent review reported no remaining concrete regression findings.
 
 ## Verification and limits
 
-- Native regression tests passed on Windows and Linux (`node:20-bookworm` container with read-only project mount and networking disabled).
+- Native regression tests passed on Windows and Linux (`node:24-bookworm` container with read-only project mount and networking disabled).
 - Final PlatformIO builds passed for `esp32dev` and `m5stack-atom` with the pinned toolchain. Existing unused-variable warnings remain.
 - Firmware sources are byte-identical; `git diff --check` passed.
 - The retry budget is checked between operations and is not a hard real-time deadline for an ongoing BLE call.
