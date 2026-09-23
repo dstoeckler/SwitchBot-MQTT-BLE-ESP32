@@ -78,6 +78,16 @@ The ESP32 serves its own responsive, offline interface at `http://<ESP32-IP>/`. 
 
 Saving network/device settings restarts the bridge and tests connectivity, with automatic rollback on failure. Language selection is a browser preference; it is not part of the exported device configuration. The setup Wi-Fi network still uses its own required access password as described above.
 
+The screenshots below show the German interface on a running bridge.
+
+### Connection overview
+
+![SwitchBot Bridge web frontend showing connection state, uptime, free memory and devices](docs/images/frontend-overview.png)
+
+### Wi-Fi and MQTT settings
+
+![SwitchBot Bridge web frontend with Wi-Fi, static IP and MQTT configuration](docs/images/frontend-network-mqtt.png)
+
 ## Administration and updates
 
 Open `http://<ESP32-IP>/` to manage the bridge. Configuration survives reboot and compatible firmware updates. Exports omit stored passwords; when restoring to another ESP32, re-enter credentials. In the web form, an empty password field retains the existing value; use its explicit removal checkbox to clear it.
