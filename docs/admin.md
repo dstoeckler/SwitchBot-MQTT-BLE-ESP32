@@ -7,7 +7,7 @@ The bridge provides a fully local interface at `http://<ESP32-IP>/`. No external
 1. Use a compatible classic ESP32 with at least **4 MB flash**. Verified PlatformIO targets are `esp32dev` and `m5stack-atom`.
 2. **Do the first migration from old firmware over USB**, not through the previous OTA form. The new layout uses two OTA slots of `0x1e0000` bytes each. The new firmware does not fit into the old default slots. A normal PlatformIO USB upload also writes the new partition table. The existing NVS region stays at the same address.
 3. Open the serial monitor at 115200 baud. On first boot, the firmware prints user `admin` and a random device-specific admin password. There is no shared default password.
-4. Open the bridge IP in your browser. By default, no web login is required. If Wi-Fi placeholders are still present, the protected setup Wi-Fi `SwitchBot-XXXX` starts immediately; alternatively, it starts after 60 seconds without Wi-Fi connectivity. Its password is the admin password. Interface URL: `http://192.168.4.1/`.
+4. Open the bridge IP in your browser. By default, no web login is required. If Wi-Fi placeholders are still present, the open setup Wi-Fi `SwitchBot-XXXX` starts immediately; alternatively, it starts after 60 seconds without Wi-Fi connectivity. Interface URL: `http://192.168.4.1/`.
 5. Enter Wi-Fi, MQTT and device settings, save, and wait for the connectivity test. Then find the new IP in your router and reload the page.
 
 ```powershell
@@ -51,9 +51,9 @@ Before changing devices, topic or broker, old Home Assistant discovery entries a
 
 ## Recover access
 
-Open serial monitor and reset. **Hold BOOT immediately after startup** when `Admin setup: hold BOOT ...` appears; hold for three seconds. Do not hold BOOT before power-on, or ROM flashing mode may start instead. Firmware generates a new admin password, prints it to serial, and opens protected setup Wi-Fi. Device configuration is not erased.
+Open serial monitor and reset. **Hold BOOT immediately after startup** when `Admin setup: hold BOOT ...` appears; hold for three seconds. Do not hold BOOT before power-on, or ROM flashing mode may start instead. Firmware generates a new admin password, prints it to serial, and opens the setup Wi-Fi network. Device configuration is not erased.
 
-Without Wi-Fi, protected setup access starts automatically after 60 seconds. Once Wi-Fi reconnects, setup access closes after ten minutes. BOOT setup mode uses GPIO0; for boards without that button, GPIO0 must be toggled accordingly after boot.
+Without Wi-Fi, setup access starts automatically after 60 seconds. Once Wi-Fi reconnects, setup access closes after ten minutes. BOOT setup mode uses GPIO0; for boards without that button, GPIO0 must be toggled accordingly after boot.
 
 ## Development and checks
 
