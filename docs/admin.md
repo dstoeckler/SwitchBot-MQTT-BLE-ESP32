@@ -7,7 +7,7 @@ Die Bridge stellt unter `http://<ESP32-IP>/` eine vollständig lokale Oberfläch
 1. Den passenden klassischen ESP32 mit mindestens **4 MB Flash** auswählen. Die geprüften PlatformIO-Ziele sind `esp32dev` und `m5stack-atom`.
 2. **Den ersten Wechsel von der alten Firmware per USB durchführen**, nicht über das bisherige OTA-Formular. Das neue Layout hat zwei OTA-Slots mit jeweils `0x1e0000` Bytes. Die neue Firmware passt nicht mehr in die bisherigen Standard-Slots. PlatformIO schreibt beim normalen USB-Upload auch die neue Partitionstabelle. Die vorhandene NVS-Region bleibt an gleicher Adresse.
 3. Seriellen Monitor mit 115200 Baud öffnen. Beim ersten Start werden der Benutzer `admin` und ein zufälliges, gerätespezifisches Admin-Passwort angezeigt. Es gibt kein gemeinsames Standardpasswort.
-4. Die IP der Bridge im Browser öffnen und anmelden. Sind noch die WLAN-Platzhalter gesetzt, startet direkt das geschützte WLAN `SwitchBot-XXXX`; alternativ startet es nach 60 Sekunden ohne WLAN-Verbindung. Dessen Passwort ist das Admin-Passwort; Oberfläche: `http://192.168.4.1/`.
+4. Die IP der Bridge im Browser öffnen. Standardmäßig ist keine Anmeldung erforderlich. Sind noch die WLAN-Platzhalter gesetzt, startet direkt das geschützte WLAN `SwitchBot-XXXX`; alternativ startet es nach 60 Sekunden ohne WLAN-Verbindung. Dessen Passwort ist das Admin-Passwort; Oberfläche: `http://192.168.4.1/`.
 5. WLAN, MQTT und Geräte eintragen, speichern und den Verbindungstest abwarten. Danach die neue IP im Router nachsehen und die Seite neu laden.
 
 ```powershell
@@ -17,6 +17,10 @@ python -m platformio run -d "PlatformIO Files/SwitchBot-BLE2MQTT-ESP32" -e esp32
 ```
 
 Die Arduino-IDE-Datei enthält die gesamte Oberfläche und Konfigurationslogik. Für einen Arduino-IDE-Build muss dieselbe Partitionstabelle gewählt/eingebunden werden (`PlatformIO Files/SwitchBot-BLE2MQTT-ESP32/partitions-admin.csv`). Dieser Installationsweg ist nicht automatisiert geprüft; PlatformIO ist der verifizierte Buildweg. Nach der USB-Migration funktionieren weitere passende Firmwareupdates wieder über die neue Oberfläche.
+
+## Sprache
+
+Im Kopfbereich kann zwischen **Deutsch** und **English** gewechselt werden. Beim ersten Besuch wird die Browsersprache verwendet: Deutsch bei `de`, ansonsten Englisch. Die Auswahl wird lokal im Browser gespeichert. Ungespeicherte Formulareingaben bleiben beim Umschalten erhalten. Statusanzeigen, Dialoge und Fehlermeldungen wechseln ebenfalls die Sprache. Es werden keine Übersetzungsdienste kontaktiert.
 
 ## Einstellungen
 
@@ -33,7 +37,7 @@ Die Namen werden auch in MQTT-Topics verwendet. Umbenennen ist daher eine Änder
 
 API-Antworten und Exporte enthalten **keine gespeicherten Passwörter**. Ein leeres Eingabefeld behält das bisherige Passwort; die Checkbox zum Entfernen setzt es ausdrücklich leer. Bei importierten Geräten werden vorhandene Bot-Passwörter nur bei identischer MAC und identischem Typ übernommen, auch wenn sich der Name ändert. Auf einem anderen ESP32 müssen die Zugangsdaten neu eingegeben werden.
 
-Admin- und OTA-Zugriff sind geschützt; schreibende Aufrufe benötigen zusätzlich einen zufälligen Sitzungstoken. HTTP Basic ist kein HTTPS. Deshalb nur im vertrauenswürdigen lokalen Netzwerk betreiben und keine öffentliche Portweiterleitung einrichten. NVS speichert Zugangsdaten im Gerätespeicher; physischer Zugriff ist dadurch nicht abgewehrt. Die alten `otaPass`-/`otaUserId`-Startwerte sind kein Zugang mehr zur Admin-Oberfläche.
+Der Passwortschutz ist standardmäßig ausgeschaltet, auch nach einem Update von einer Version ohne diese Option. Unter Administration „Passwortschutz aktivieren“ auswählen, ein Passwort mit 12–63 Zeichen zweimal eingeben und „Passwortschutz speichern“ drücken. Der Benutzername lautet `admin`. Die Einstellung bleibt nach Neustarts erhalten und schützt Oberfläche, API und OTA. Zum Abschalten das Häkchen entfernen und speichern. Schreibende Aufrufe benötigen in beiden Modi einen zufälligen Sitzungstoken. Das Passwort des Einrichtungs-WLANs bleibt weiterhin erforderlich. HTTP Basic ist kein HTTPS. Deshalb nur im vertrauenswürdigen lokalen Netzwerk betreiben und keine öffentliche Portweiterleitung einrichten. NVS speichert Zugangsdaten im Gerätespeicher; physischer Zugriff ist dadurch nicht abgewehrt. Die alten `otaPass`-/`otaUserId`-Startwerte sind kein Zugang mehr zur Admin-Oberfläche.
 
 ## Speichern, Test und Rollback
 
@@ -53,7 +57,7 @@ Ohne WLAN startet der geschützte Zugang nach 60 Sekunden automatisch. Ist WLAN 
 
 ## Entwicklung und Prüfung
 
-`admin/index.html`, `admin/config_core.h`, `admin/config_json.h` und `admin/runtime.inc` sind die bearbeitbaren Quellen. Anschließend `python tools/sync_admin.py` ausführen: Die komprimierte Oberfläche und der C++-Code werden in beide eigenständig nutzbaren Firmwaredateien eingebettet. Nicht direkt in den generierten Bereichen ändern.
+`admin/index.html`, `admin/i18n.js`, `admin/translations.json`, `admin/config_core.h`, `admin/config_json.h` und `admin/runtime.inc` sind die bearbeitbaren Quellen. Anschließend `python tools/sync_admin.py` ausführen: Die komprimierte Oberfläche und der C++-Code werden in beide eigenständig nutzbaren Firmwaredateien eingebettet. Nicht direkt in den generierten Bereichen ändern.
 
 ```
 python tools/sync_admin.py --check

@@ -1,7 +1,7 @@
 // Configuration is applied once, before WiFi, BLE and MQTT are started.
 static admin::Config adminConfig;
 static Preferences adminStore;
-static bool adminStorageOK=false, adminAP=false;
+static bool adminStorageOK=false, adminAP=false, adminAuthEnabled=false;
 static String adminToken, adminNotice, adminCandidate;
 static uint32_t adminBootAt=0, adminConnectedAt=0, adminRestartAt=0, adminAPAt=0;
 
@@ -20,7 +20,7 @@ static void adminError(int status,const char *message) {
   StaticJsonDocument<256> doc;doc["error"]=message;adminJson(status,doc);
 }
 static bool adminAuthorized(bool write=false) {
-  if(!server.authenticate("admin",otaPass.c_str())) {server.requestAuthentication();return false;}
+  if(adminAuthEnabled && !server.authenticate("admin",otaPass.c_str())) {server.requestAuthentication();return false;}
   if(write && (adminToken.isEmpty() || server.header("X-CSRF-Token")!=adminToken)) {adminError(403,"Seite neu laden: Sitzung ungueltig.");return false;}
   if(write && (adminTrial || adminRestartAt)) {adminError(409,"Neustart oder Verbindungspruefung laeuft.");return false;}
   return true;
@@ -72,6 +72,7 @@ static void adminLoad() {
   adminCaptureDefaults();
   adminStorageOK=adminStore.begin("sb-admin",false);
   adminToken=adminRandom();
+  adminAuthEnabled=adminStorageOK && adminStore.getBool("authEnabled",false);
   otaPass=adminStorageOK?adminStore.getString("password",""):String("");
   if(otaPass.length()<12){otaPass=adminRandom().substring(0,20);if(adminStorageOK)adminStorageOK=adminStore.putString("password",otaPass)==otaPass.length();Serial.printf("Initial admin user: admin\nInitial admin password: %s\n",otaPass.c_str());}
   String stored=adminStorageOK?adminStore.getString("active",""):String("");
@@ -113,7 +114,7 @@ static void adminRoutes() {
   server.on("/api/config",HTTP_GET,[](){
     if(!adminAuthorized())return;
     DynamicJsonDocument doc(12000),redacted(10000);admin::encode(redacted,adminConfig,false);
-    doc["config"]=redacted.as<JsonObject>();doc["csrf"]=adminToken;doc["trial"]=adminTrial;adminJson(200,doc);
+    doc["config"]=redacted.as<JsonObject>();doc["csrf"]=adminToken;doc["authEnabled"]=adminAuthEnabled;doc["trial"]=adminTrial;adminJson(200,doc);
   });
   server.on("/api/status",HTTP_GET,[](){
     if(!adminAuthorized())return;
@@ -154,10 +155,22 @@ static void adminRoutes() {
   });
   server.on("/api/password",HTTP_POST,[](){
     if(!adminAuthorized(true))return;
-    StaticJsonDocument<192> doc;if(deserializeJson(doc,server.arg("plain"))||!doc["password"].is<const char*>()){adminError(400,"Passwort fehlt.");return;}
-    String value=doc["password"].as<String>();if(value.length()<12||value.length()>63){adminError(400,"Admin-Passwort: 12–63 Zeichen.");return;}
-    if(!adminStorageOK||adminStore.putString("password",value)!=value.length()){adminError(507,"Passwort konnte nicht gespeichert werden.");return;}
-    otaPass=value;server.send(200,"application/json","{}");
+    StaticJsonDocument<256> doc;
+    if(deserializeJson(doc,server.arg("plain"))||!doc["enabled"].is<bool>()){adminError(400,"Passwortschutz fehlt.");return;}
+    const bool enabled=doc["enabled"].as<bool>();
+    String value;
+    if(enabled){
+      if(!doc["password"].is<const char*>()){adminError(400,"Passwort fehlt.");return;}
+      value=doc["password"].as<String>();
+      if(value.length()<12||value.length()>63){adminError(400,"Admin-Passwort: 12–63 Zeichen.");return;}
+    }
+    if(!adminStorageOK){adminError(507,"Konfigurationsspeicher nicht verfuegbar.");return;}
+    if(enabled){
+      if(adminStore.putString("password",value)!=value.length()){adminError(507,"Passwort konnte nicht gespeichert werden.");return;}
+      otaPass=value;
+    }
+    if(!adminStore.putBool("authEnabled",enabled)){adminError(507,"Passwortschutz konnte nicht gespeichert werden.");return;}
+    adminAuthEnabled=enabled;server.send(200,"application/json","{}");
   });
   server.on("/api/restart",HTTP_POST,[](){if(!adminAuthorized(true))return;server.send(200,"application/json","{}");adminRestartAt=millis()+1000;});
 }

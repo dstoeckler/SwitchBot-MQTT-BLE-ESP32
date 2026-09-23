@@ -2,14 +2,22 @@
 from pathlib import Path
 import gzip
 import re
+import json
 
 ROOT=Path(__file__).resolve().parents[1]
 SKETCH=ROOT/'Arduino IDE Files/SwitchBot-BLE2MQTT-ESP32.ino'
 
+def localized_script():
+    translations=json.loads((ROOT/'admin/translations.json').read_text(encoding='utf-8'))
+    return 'const english='+json.dumps(translations,ensure_ascii=False)+';\n'+(ROOT/'admin/i18n.js').read_text(encoding='utf-8')
+
+def rendered_page():
+    return (ROOT/'admin/index.html').read_text(encoding='utf-8').replace('<script src="i18n.js"></script>', '<script>\n'+localized_script()+'\n</script>')
+
 def generated():
     core=(ROOT/'admin/config_core.h').read_text(encoding='utf-8').replace('#pragma once\n','')
     codec=(ROOT/'admin/config_json.h').read_text(encoding='utf-8').replace('#pragma once\n','').replace('#include "config_core.h"\n','')
-    ui=bytearray(gzip.compress((ROOT/'admin/index.html').read_text(encoding='utf-8').encode('utf-8'),mtime=0))
+    ui=bytearray(gzip.compress(rendered_page().encode('utf-8'),mtime=0))
     # Python 3.11/3.12 delegate mtime=0 to zlib, which emits a host OS byte.
     # Normalize it to the portable "unknown" value used by Python 3.13+.
     ui[9]=255

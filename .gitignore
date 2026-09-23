@@ -4,3 +4,5 @@ __pycache__/
 build-validation.log
 build-admin.log
 build-admin-preview-request.json
+# Local Arduino IDE working copy; the maintained standalone sketch is one level above.
+Arduino IDE Files/SwitchBot-BLE2MQTT-ESP32/

@@ -65,7 +65,7 @@ struct Server {
   HTTPUpload& upload() { return data; }
 } server;
 void adminError(int code,const char *) { server.status=code; }
-bool adminTrial=false;
+bool adminTrial=false,adminAuthEnabled=true;
 unsigned long adminRestartAt=0;
 String adminToken="valid";
 struct Updater {
@@ -182,6 +182,12 @@ int main() {
   server.token="valid";adminTrial=true;
   upload(UPLOAD_FILE_START);upload(UPLOAD_FILE_WRITE);upload(UPLOAD_FILE_END);server.completed();
   assert(Update.starts==starts && ESP.reboots==1);
+  adminTrial=false;adminAuthEnabled=false;server.authorized=false;server.token="wrong";
+  upload(UPLOAD_FILE_START);upload(UPLOAD_FILE_WRITE);upload(UPLOAD_FILE_END);server.completed();
+  assert(Update.starts==starts && server.status==403 && ESP.reboots==1);
+  server.token="valid";
+  upload(UPLOAD_FILE_START);upload(UPLOAD_FILE_WRITE);upload(UPLOAD_FILE_END);server.completed();
+  assert(Update.starts==starts+1 && server.status==200 && ESP.reboots==2);
 }
 '''
         compiler = shutil.which('g++')

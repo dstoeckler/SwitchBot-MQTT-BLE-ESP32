@@ -61,7 +61,7 @@ using String=std::string;
 uint32_t now=0;
 uint32_t millis(){return now;}
 admin::Config adminConfig;
-bool adminStorageOK=false,adminTrial=false,adminAP=false;
+bool adminStorageOK=false,adminTrial=false,adminAP=false,adminAuthEnabled=false;
 String adminToken,adminNotice,adminCandidate,otaPass;
 uint32_t adminBootAt=0,adminConnectedAt=0,adminRestartAt=0,adminAPAt=0;
 struct Store {
@@ -116,7 +116,12 @@ int main(){
  assert(!adminTrial&&adminStore.values["active"]==encoded(next)&&adminStore.values.count("pending")==0&&published==1);
  adminStore.values["active"]=encoded(old);adminStore.values["pending"]=encoded(next);boot();adminStore.fail="active";client.connected=true;now=100;adminTick();now=5101;adminTick();
  assert(adminRestartAt&&adminStore.values["active"]==encoded(old));adminStore.fail="";boot();assert(adminConfig.host=="old");
+ assert(!adminAuthEnabled&&adminAuthorized());
+ assert(!adminAuthorized(true)&&server.status==403);
+ server.token=adminToken;assert(adminAuthorized(true));
+ adminStore.putBool("authEnabled",true);boot();assert(adminAuthEnabled);
  assert(!adminAuthorized(true)&&server.status==401);
+ server.token="";
  server.authorized=true;assert(!adminAuthorized(true)&&server.status==403);
  server.token=adminToken;assert(adminAuthorized(true));adminTrial=true;assert(!adminAuthorized(true)&&server.status==409);
  adminTrial=false;adminRestartAt=100;assert(!adminAuthorized(true));

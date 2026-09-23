@@ -2,6 +2,7 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import json
+from sync_admin import rendered_page
 
 ROOT=Path(__file__).resolve().parents[1]
 CONFIG=dict(version=1,host='living-room',ssid='Zuhause',mqttHost='192.168.1.20',mqttUser='switchbot',topic='switchbot',port=1883,scanSeconds=120,rescanSeconds=10800,retries=5,staticAddress=False,ip='192.168.1.50',gateway='192.168.1.1',subnet='255.255.255.0',dns='192.168.1.1',devices=[dict(id='stehlampe',mac='AA:BB:CC:DD:EE:01',type='bot',entity='switch'),dict(id='wohnzimmer',mac='AA:BB:CC:DD:EE:02',type='curtain',entity='switch')])
@@ -12,7 +13,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status);self.send_header('Content-Type',content);self.send_header('Content-Length',str(len(data)));self.end_headers();self.wfile.write(data)
 
     def do_GET(self):
-        if self.path=='/':self.reply(200,(ROOT/'admin/index.html').read_text(encoding='utf-8'),'text/html; charset=utf-8')
+        if self.path=='/':self.reply(200,rendered_page(),'text/html; charset=utf-8')
         elif self.path=='/api/config':self.reply(200,dict(config=CONFIG,csrf='preview-token',trial=False))
         elif self.path=='/api/status':self.reply(200,dict(wifi=True,mqtt=True,ip='192.168.1.50',uptime=86400,heap=124000,devices=len(CONFIG['devices']),ap=False,trial=False,notice='Lokale Vorschau – keine Hardware verbunden.'))
         else:self.reply(404,dict(error='Nicht gefunden'))

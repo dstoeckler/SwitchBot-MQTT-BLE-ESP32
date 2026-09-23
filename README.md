@@ -52,7 +52,7 @@ python -m platformio device monitor -b 115200
 Use `--upload-port COM5` or monitor `-p COM5`, substituting your actual port, if automatic selection is ambiguous. Close the serial monitor before another USB upload.
 
 1. Open the serial monitor at **115200 baud** and reset the board. On first boot it prints the username `admin` and a random device-specific password. Keep it; there is no shared default password.
-2. With the supplied WiFi placeholders, connect to the protected **`SwitchBot-XXXX`** network using that admin password. Open **`http://192.168.4.1/`** and log in. If WiFi is already configured, open the ESP32's LAN IP instead. Setup WiFi also starts after 60 seconds without a WiFi connection.
+2. With the supplied WiFi placeholders, connect to the protected **`SwitchBot-XXXX`** network using that admin password. Open **`http://192.168.4.1/`**. No web login is required by default. If WiFi is already configured, open the ESP32's LAN IP instead. Setup WiFi also starts after 60 seconds without a WiFi connection.
 3. Enter WiFi and MQTT settings and add devices with their BLE MAC addresses. An empty MQTT username selects anonymous broker authentication. Routine setup does not require editing firmware source.
 4. Save. The ESP32 restarts and tests the candidate configuration: WiFi and MQTT must connect within **75 seconds**, with MQTT connected for at least **five seconds**. BLE processing pauses during this test. On failure or an interrupted test, the previous configuration is restored.
 5. Find the new IP in your router and reload the page. With Home Assistant MQTT integration configured, discovery is published after the configuration test succeeds.
@@ -65,11 +65,24 @@ The standalone sketch is `Arduino IDE Files/SwitchBot-BLE2MQTT-ESP32.ino`; the a
 
 The Arduino build must also use **`PlatformIO Files/SwitchBot-BLE2MQTT-ESP32/partitions-admin.csv`**. Merely uploading the sketch with the old default partition scheme is insufficient. Arduino IDE installation and partition integration are not automated or verified here; PlatformIO is the verified build path.
 
+## Local web frontend
+
+The ESP32 serves its own responsive, offline interface at `http://<ESP32-IP>/`. All styles, scripts and translations are embedded in the firmware; no cloud service, CDN or separate frontend installation is needed.
+
+- **German and English:** choose **Deutsch / English** in the header. The first visit follows the browser language (German for `de`, English otherwise). Your selection is remembered in that browser. Switching languages preserves unsaved form entries and does not restart the bridge.
+- **Live overview:** Wi-Fi and MQTT connection state, IP address, uptime, free memory, configured device count and setup mode.
+- **Network and MQTT:** configure Wi-Fi, DHCP/static IPv4, broker credentials, port, base topic and bridge name.
+- **Devices:** manage up to 16 supported SwitchBot devices, set Bot entity types and passwords, and request status without operating a device.
+- **Maintenance:** adjust scan intervals and retries, import/export JSON configuration, restart the bridge and upload compatible `.bin` firmware.
+- **Optional login:** password protection is off by default. Enable it under **Administration → Enable password protection**, enter the new password twice, and save. The username is `admin`; the setting persists across restarts and protects the web interface, API and OTA uploads. You can disable it again in the same section.
+
+Saving network/device settings restarts the bridge and tests connectivity, with automatic rollback on failure. Language selection is a browser preference; it is not part of the exported device configuration. The setup Wi-Fi network still uses its own required access password as described above.
+
 ## Administration and updates
 
 Open `http://<ESP32-IP>/` to manage the bridge. Configuration survives reboot and compatible firmware updates. Exports omit stored passwords; when restoring to another ESP32, re-enter credentials. In the web form, an empty password field retains the existing value; use its explicit removal checkbox to clear it.
 
-Admin access and OTA require authentication; writes also require the interface's session token. The old `useLoginScreen`, `otaUserId` and `otaPass` source settings do not provide an optional-login mode or the current credentials. HTTP Basic and MQTT are unencrypted, so use a trusted local network without public port forwarding.
+Web login is disabled by default, including after upgrading from firmware without the optional-login setting. Enable it under Administration by selecting password protection, entering a password (12–63 characters) twice and saving. The username is `admin`. The setting persists across restarts and applies to admin access and OTA. Uncheck and save to disable it. Writes always require the interface's session token. HTTP Basic and MQTT are unencrypted, so use a trusted local network without public port forwarding.
 
 After the initial USB migration, build for the same board and partition layout and upload the application image through the admin interface:
 
