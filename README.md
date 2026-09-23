@@ -52,7 +52,7 @@ python -m platformio device monitor -b 115200
 Use `--upload-port COM5` or monitor `-p COM5`, substituting your actual port, if automatic selection is ambiguous. Close the serial monitor before another USB upload.
 
 1. Open the serial monitor at **115200 baud** and reset the board. On first boot it prints the username `admin` and a random device-specific password. Keep it; there is no shared default password.
-2. With the supplied WiFi placeholders, connect to the protected **`SwitchBot-XXXX`** network using that admin password. Open **`http://192.168.4.1/`**. No web login is required by default. If WiFi is already configured, open the ESP32's LAN IP instead. Setup WiFi also starts after 60 seconds without a WiFi connection.
+2. With the supplied WiFi placeholders, connect to the open **`SwitchBot-XXXX`** network. Open **`http://192.168.4.1/`**. No web login is required by default. If WiFi is already configured, open the ESP32's LAN IP instead. Setup WiFi also starts after 60 seconds without a WiFi connection.
 3. Enter WiFi and MQTT settings and add devices with their BLE MAC addresses. An empty MQTT username selects anonymous broker authentication. Routine setup does not require editing firmware source.
 4. Save. The ESP32 restarts and tests the candidate configuration: WiFi and MQTT must connect within **75 seconds**, with MQTT connected for at least **five seconds**. BLE processing pauses during this test. On failure or an interrupted test, the previous configuration is restored.
 5. Find the new IP in your router and reload the page. With Home Assistant MQTT integration configured, discovery is published after the configuration test succeeds.

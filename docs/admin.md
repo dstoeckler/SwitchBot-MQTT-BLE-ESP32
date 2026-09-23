@@ -7,7 +7,7 @@ Die Bridge stellt unter `http://<ESP32-IP>/` eine vollständig lokale Oberfläch
 1. Den passenden klassischen ESP32 mit mindestens **4 MB Flash** auswählen. Die geprüften PlatformIO-Ziele sind `esp32dev` und `m5stack-atom`.
 2. **Den ersten Wechsel von der alten Firmware per USB durchführen**, nicht über das bisherige OTA-Formular. Das neue Layout hat zwei OTA-Slots mit jeweils `0x1e0000` Bytes. Die neue Firmware passt nicht mehr in die bisherigen Standard-Slots. PlatformIO schreibt beim normalen USB-Upload auch die neue Partitionstabelle. Die vorhandene NVS-Region bleibt an gleicher Adresse.
 3. Seriellen Monitor mit 115200 Baud öffnen. Beim ersten Start werden der Benutzer `admin` und ein zufälliges, gerätespezifisches Admin-Passwort angezeigt. Es gibt kein gemeinsames Standardpasswort.
-4. Die IP der Bridge im Browser öffnen. Standardmäßig ist keine Anmeldung erforderlich. Sind noch die WLAN-Platzhalter gesetzt, startet direkt das geschützte WLAN `SwitchBot-XXXX`; alternativ startet es nach 60 Sekunden ohne WLAN-Verbindung. Dessen Passwort ist das Admin-Passwort; Oberfläche: `http://192.168.4.1/`.
+4. Die IP der Bridge im Browser öffnen. Standardmäßig ist keine Anmeldung erforderlich. Sind noch die WLAN-Platzhalter gesetzt, startet direkt das offene WLAN `SwitchBot-XXXX`; alternativ startet es nach 60 Sekunden ohne WLAN-Verbindung. Oberfläche: `http://192.168.4.1/`.
 5. WLAN, MQTT und Geräte eintragen, speichern und den Verbindungstest abwarten. Danach die neue IP im Router nachsehen und die Seite neu laden.
 
 ```powershell
@@ -37,7 +37,7 @@ Die Namen werden auch in MQTT-Topics verwendet. Umbenennen ist daher eine Änder
 
 API-Antworten und Exporte enthalten **keine gespeicherten Passwörter**. Ein leeres Eingabefeld behält das bisherige Passwort; die Checkbox zum Entfernen setzt es ausdrücklich leer. Bei importierten Geräten werden vorhandene Bot-Passwörter nur bei identischer MAC und identischem Typ übernommen, auch wenn sich der Name ändert. Auf einem anderen ESP32 müssen die Zugangsdaten neu eingegeben werden.
 
-Der Passwortschutz ist standardmäßig ausgeschaltet, auch nach einem Update von einer Version ohne diese Option. Unter Administration „Passwortschutz aktivieren“ auswählen, ein Passwort mit 12–63 Zeichen zweimal eingeben und „Passwortschutz speichern“ drücken. Der Benutzername lautet `admin`. Die Einstellung bleibt nach Neustarts erhalten und schützt Oberfläche, API und OTA. Zum Abschalten das Häkchen entfernen und speichern. Schreibende Aufrufe benötigen in beiden Modi einen zufälligen Sitzungstoken. Das Passwort des Einrichtungs-WLANs bleibt weiterhin erforderlich. HTTP Basic ist kein HTTPS. Deshalb nur im vertrauenswürdigen lokalen Netzwerk betreiben und keine öffentliche Portweiterleitung einrichten. NVS speichert Zugangsdaten im Gerätespeicher; physischer Zugriff ist dadurch nicht abgewehrt. Die alten `otaPass`-/`otaUserId`-Startwerte sind kein Zugang mehr zur Admin-Oberfläche.
+Der Passwortschutz ist standardmäßig ausgeschaltet, auch nach einem Update von einer Version ohne diese Option. Unter Administration „Passwortschutz aktivieren“ auswählen, ein Passwort mit 12–63 Zeichen zweimal eingeben und „Passwortschutz speichern“ drücken. Der Benutzername lautet `admin`. Die Einstellung bleibt nach Neustarts erhalten und schützt Oberfläche, API und OTA. Zum Abschalten das Häkchen entfernen und speichern. Schreibende Aufrufe benötigen in beiden Modi einen zufälligen Sitzungstoken. HTTP Basic ist kein HTTPS. Deshalb nur im vertrauenswürdigen lokalen Netzwerk betreiben und keine öffentliche Portweiterleitung einrichten. NVS speichert Zugangsdaten im Gerätespeicher; physischer Zugriff ist dadurch nicht abgewehrt. Die alten `otaPass`-/`otaUserId`-Startwerte sind kein Zugang mehr zur Admin-Oberfläche.
 
 ## Speichern, Test und Rollback
 
@@ -51,9 +51,9 @@ Vor Änderungen an Geräten, Topic oder Broker werden die alten HA-Discovery-Ein
 
 ## Zugang wiederherstellen
 
-Seriellen Monitor öffnen und neu starten. **BOOT unmittelbar nach dem Start gedrückt halten**, wenn die Meldung `Admin setup: hold BOOT ...` erscheint; drei Sekunden halten. Nicht schon beim Einschalten halten, sonst kann der ROM-Flashmodus starten. Die Firmware erzeugt ein neues Admin-Passwort, zeigt es seriell an und öffnet das geschützte Einrichtungs-WLAN. Die Gerätekonfiguration wird dabei nicht gelöscht.
+Seriellen Monitor öffnen und neu starten. **BOOT unmittelbar nach dem Start gedrückt halten**, wenn die Meldung `Admin setup: hold BOOT ...` erscheint; drei Sekunden halten. Nicht schon beim Einschalten halten, sonst kann der ROM-Flashmodus starten. Die Firmware erzeugt ein neues Admin-Passwort, zeigt es seriell an und öffnet das offene Einrichtungs-WLAN. Die Gerätekonfiguration wird dabei nicht gelöscht.
 
-Ohne WLAN startet der geschützte Zugang nach 60 Sekunden automatisch. Ist WLAN wieder verbunden, wird der Zugang nach zehn Minuten geschlossen. Der BOOT-Einrichtungsmodus verwendet GPIO0; bei Boards ohne diese Taste muss GPIO0 nach dem Start entsprechend geschaltet werden.
+Ohne WLAN startet der Einrichtungszugang nach 60 Sekunden automatisch. Ist WLAN wieder verbunden, wird der Zugang nach zehn Minuten geschlossen. Der BOOT-Einrichtungsmodus verwendet GPIO0; bei Boards ohne diese Taste muss GPIO0 nach dem Start entsprechend geschaltet werden.
 
 ## Entwicklung und Prüfung
 

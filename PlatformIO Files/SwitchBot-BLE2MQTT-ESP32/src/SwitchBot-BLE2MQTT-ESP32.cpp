@@ -4906,8 +4906,8 @@ static void adminApply() {
 static void adminStartAP() {
   if(adminAP)return;
   String name="SwitchBot-"+WiFi.macAddress().substring(12);name.replace(":","");
-  WiFi.mode(WIFI_AP_STA);adminAP=WiFi.softAP(name.c_str(),otaPass.c_str());adminAPAt=millis();
-  Serial.printf("Setup WiFi: %s\nSetup address: http://192.168.4.1\nAdmin user: admin\nAdmin password: %s\n",name.c_str(),otaPass.c_str());
+  WiFi.mode(WIFI_AP_STA);adminAP=WiFi.softAP(name.c_str());adminAPAt=millis();
+  Serial.printf("Setup WiFi: %s (open)\nSetup address: http://192.168.4.1\n",name.c_str());
 }
 static void adminLoad() {
   adminCaptureDefaults();
