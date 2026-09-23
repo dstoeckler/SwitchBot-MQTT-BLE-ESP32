@@ -188,7 +188,7 @@ python -m platformio run -d "PlatformIO Files/SwitchBot-BLE2MQTT-ESP32" -e esp32
 python -m unittest discover -s tests -v
 ```
 
-Tests need `g++` on PATH. Codec/rollback tests additionally use ArduinoJson headers installed by PlatformIO and are skipped if these are missing. The workflow in `.gitea/workflows/` checks source consistency, tests and both build targets; it is a Gitea workflow, not a GitHub Actions workflow.
+Tests need `g++` on PATH. Codec/rollback tests additionally use ArduinoJson headers installed by PlatformIO and are skipped if these are missing. The GitHub Actions workflow in `.github/workflows/firmware-build.yml` checks source consistency, tests and both build targets automatically on pushes, pull requests and manual dispatch.
 
 For a browser-only admin preview, run `python tools/preview_admin.py` and open `http://127.0.0.1:8765`. It simulates API responses and does not communicate with hardware. See [validation notes](docs/validation.md) and the [admin guide](docs/admin.md) for recorded checks and outstanding hardware tests.
 
