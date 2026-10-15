@@ -1,16 +1,60 @@
 // `english` is injected from translations.json by the firmware/preview builder.
 const languageKey = 'switchbot-language';
-let language = navigator.language.toLowerCase().startsWith('de') ? 'de' : 'en';
+const supportedLanguages = ['de', 'en'];
+
+function resolveLanguage(candidate) {
+  if (typeof candidate !== 'string') return null;
+  const tag = candidate.toLowerCase();
+  if (supportedLanguages.includes(tag)) return tag;
+  const base = tag.split('-')[0];
+  return supportedLanguages.includes(base) ? base : null;
+}
+
+function preferredBrowserLanguage() {
+  const candidates = Array.isArray(navigator.languages) && navigator.languages.length ? navigator.languages : [navigator.language];
+  for (const candidate of candidates) {
+    const resolved = resolveLanguage(candidate);
+    if (resolved) return resolved;
+  }
+  return 'en';
+}
+
+let language = preferredBrowserLanguage();
 try {
-  const stored = localStorage.getItem(languageKey);
-  if (stored === 'de' || stored === 'en') language = stored;
+  const stored = resolveLanguage(localStorage.getItem(languageKey));
+  if (stored) language = stored;
 } catch (_) { /* Browser storage is optional. */ }
+
+function normalizeUmlauts(value) {
+  return value
+    .replace(/ä/g, 'ae')
+    .replace(/ö/g, 'oe')
+    .replace(/ü/g, 'ue')
+    .replace(/Ä/g, 'Ae')
+    .replace(/Ö/g, 'Oe')
+    .replace(/Ü/g, 'Ue')
+    .replace(/ß/g, 'ss');
+}
+
+function englishFor(value) {
+  if (Object.hasOwn(english, value)) return english[value];
+  const normalized = typeof value.normalize === 'function' ? value.normalize('NFC') : value;
+  if (normalized !== value && Object.hasOwn(english, normalized)) return english[normalized];
+  const fallback = normalizeUmlauts(normalized);
+  if (fallback !== normalized && Object.hasOwn(english, fallback)) return english[fallback];
+  return undefined;
+}
+
+const variableMessagePrefixes = Object.keys(english)
+  .filter(key => key.endsWith(': '))
+  .sort((a, b) => b.length - a.length);
 
 function t(value) {
   if (language !== 'en' || typeof value !== 'string') return value;
-  if (Object.hasOwn(english, value)) return english[value];
+  const direct = englishFor(value);
+  if (direct !== undefined) return direct;
   // Backend validation errors can append a field name; connection errors append a cause.
-  for (const prefix of ['Textfeld fehlt: ', 'Ganzzahl fehlt: ', 'Verbindung fehlgeschlagen: ']) {
+  for (const prefix of variableMessagePrefixes) {
     if (value.startsWith(prefix)) return english[prefix] + t(value.slice(prefix.length));
   }
   return value;

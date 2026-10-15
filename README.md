@@ -12,7 +12,7 @@ This is the **dstoeckler fork**, based on devWaves' v7.1 firmware, with AI-assis
 - MQTT parsing checks, bounded BLE retries, scan timeouts and improved WiFi/MQTT recovery.
 - Home Assistant entity naming without repeated device names, plus ESP32 uptime and diagnostic attributes.
 
-See the [admin and USB migration guide (German)](docs/admin.md) and [validation notes](docs/validation.md). Build and host-side test results do not establish reliability on physical hardware; USB migration, BLE, network recovery and OTA still need hardware acceptance testing.
+See the [admin and USB migration guide](docs/admin.md) and [validation notes](docs/validation.md). Build and host-side test results do not establish reliability on physical hardware; USB migration, BLE, network recovery and OTA still need hardware acceptance testing.
 
 ## Devices and boards
 
