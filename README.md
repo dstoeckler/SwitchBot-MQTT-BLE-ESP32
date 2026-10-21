@@ -108,6 +108,10 @@ For forgotten credentials, open the serial monitor, reset the ESP32 and hold **B
 
 For a single bridge, `<base>` means `<mqtt_main_topic>/<host>`, by default **`switchbot/esp32`**. `<name>` is the configured device name, not its MAC address. Text commands below are plain MQTT payloads without surrounding JSON quotes. Do not retain action commands, since a later subscription can replay them.
 
+On boot and MQTT reconnect, command subscriptions now ignore messages until a fresh, non-retained `__bridge_ready_...` marker returns on each command topic. This prevents stored `PRESS`, `ON`, hold or mode commands from executing again after subscription. Retained state/settings and Home Assistant discovery still work normally. The broker ACL must allow the bridge to publish and subscribe to its command topics; otherwise those topics remain disabled. Commands sent during this brief handshake are discarded, not queued. Markers are internal synchronization messages and must not be used to trigger automations.
+
+An automation that sends a **new** command when the bridge comes online is still executed after the handshake. If the Bot moves on restart despite this protection, check such automations and any explicitly configured BOOT-button actions.
+
 ### Device commands
 
 | Topic | Payload |

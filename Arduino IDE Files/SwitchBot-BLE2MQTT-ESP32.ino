@@ -7020,7 +7020,31 @@ void requestInfoMQTT(std::string & payload) {
   processing = false;
 }
 
+// EspMQTTClient does not expose the RETAIN flag. Arm each command topic only
+// after our fresh non-retained marker returns on that same topic. Retained
+// actions replayed by subscribe arrive before it and never reach the queue.
+// State subscriptions remain unchanged; repeat on every MQTT connection.
+static std::string commandSubscriptionMarker;
+static std::map<std::string, bool> commandTopicReady;
+
+bool subscribeCommandTopic(const char *topic, MessageReceivedCallback callback) {
+  const std::string key(topic);
+  commandTopicReady[key] = false;
+  if (!client.subscribe(topic, [key, callback](const String &payload) {
+    if (payload == commandSubscriptionMarker.c_str()) {
+      commandTopicReady[key] = true;
+      return;
+    }
+    if (!commandTopicReady[key] || payload.isEmpty()) return;
+    callback(payload);
+  })) return false;
+  // If publishing/receiving the marker fails, leave the topic disarmed.
+  return client.publish(topic, commandSubscriptionMarker.c_str(), false);
+}
+
 void onConnectionEstablished() {
+  commandSubscriptionMarker = ("__bridge_ready_" + adminRandom()).c_str();
+  commandTopicReady.clear();
   if (!MDNS.begin(host)) {
     printAString("Error starting mDNS");
   }
@@ -7032,7 +7056,7 @@ void onConnectionEstablished() {
   std::map<std::string, std::string>::iterator it;
 
   if (manualDebugStartESP32WithMQTT) {
-    client.subscribe((ESPMQTTTopic + "/manualstart").c_str(), [aDevice] (const String & payload)  {
+    subscribeCommandTopic((ESPMQTTTopic + "/manualstart").c_str(), [aDevice] (const String & payload)  {
       if ((payload != NULL) && !(payload.isEmpty())) {
         printAString("Manually starting ESP32...");
         manualDebugStartESP32WithMQTT = false;
@@ -7139,7 +7163,7 @@ void onConnectionEstablished() {
     {
       std::string deviceStr ;
       aDevice = it->first.c_str();
-      client.subscribe((curtainTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
+      subscribeCommandTopic((curtainTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
         if ((payload != NULL) && !(payload.isEmpty())) {
           printAString("Control MQTT Received...");
           if (pScan->isScanning() || isRescanning) {
@@ -7215,7 +7239,7 @@ void onConnectionEstablished() {
       std::string deviceStr ;
       aDevice = it->first.c_str();
 
-      client.subscribe((botTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
+      subscribeCommandTopic((botTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
         if ((payload != NULL) && !(payload.isEmpty())) {
           printAString("Control MQTT Received...");
 
@@ -7320,7 +7344,7 @@ void onConnectionEstablished() {
       std::string deviceStr ;
       aDevice = it->first.c_str();
 
-      client.subscribe((plugTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
+      subscribeCommandTopic((plugTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
         if ((payload != NULL) && !(payload.isEmpty())) {
           printAString("Control MQTT Received...");
           std::string deviceStateTopic = plugTopic + aDevice + "/state";
@@ -7371,7 +7395,7 @@ void onConnectionEstablished() {
     {
       std::string deviceStr ;
       aDevice = it->first.c_str();
-      client.subscribe((meterTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
+      subscribeCommandTopic((meterTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
         if ((payload != NULL) && !(payload.isEmpty())) {
           printAString("Control MQTT Received...");
           bool skip = false;
@@ -7414,7 +7438,7 @@ void onConnectionEstablished() {
     {
       std::string deviceStr ;
       aDevice = it->first.c_str();
-      client.subscribe((contactTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
+      subscribeCommandTopic((contactTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
         if ((payload != NULL) && !(payload.isEmpty())) {
           printAString("Control MQTT Received...");
           bool skip = false;
@@ -8214,7 +8238,7 @@ void onConnectionEstablished() {
     {
       std::string deviceStr ;
       aDevice = it->first.c_str();
-      client.subscribe((motionTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
+      subscribeCommandTopic((motionTopic + aDevice + "/set").c_str(), [aDevice] (const String & payload)  {
         if ((payload != NULL) && !(payload.isEmpty())) {
           printAString("Control MQTT Received...");
           bool skip = false;
@@ -8586,7 +8610,7 @@ void onConnectionEstablished() {
       it++;
     }
 
-    client.subscribe(requestInfoStdStr.c_str(), [] (const String & payload)  {
+    subscribeCommandTopic(requestInfoStdStr.c_str(), [] (const String & payload)  {
       if ((payload != NULL) && !(payload.isEmpty())) {
         printAString("Request Info MQTT Received...");
         bool skip = false;
@@ -8618,7 +8642,7 @@ void onConnectionEstablished() {
       }
     });
 
-    client.subscribe(requestSettingsStdStr.c_str(), [] (const String & payload)  {
+    subscribeCommandTopic(requestSettingsStdStr.c_str(), [] (const String & payload)  {
       if ((payload != NULL) && !(payload.isEmpty())) {
         printAString("Request Settings MQTT Received...");
         if (!commandQueue.isFull()) {
@@ -8646,7 +8670,7 @@ void onConnectionEstablished() {
       }
     });
 
-    client.subscribe(setModeStdStr.c_str(), [] (const String & payload)  {
+    subscribeCommandTopic(setModeStdStr.c_str(), [] (const String & payload)  {
       if ((payload != NULL) && !(payload.isEmpty())) {
         printAString("setMode  MQTT Received...");
         if (!commandQueue.isFull()) {
@@ -8675,7 +8699,7 @@ void onConnectionEstablished() {
       }
     });
 
-    client.subscribe(setHoldStdStr.c_str(), [] (const String & payload)  {
+    subscribeCommandTopic(setHoldStdStr.c_str(), [] (const String & payload)  {
       if ((payload != NULL) && !(payload.isEmpty())) {
         printAString("setHold MQTT Received...");
         if (!commandQueue.isFull()) {
@@ -8705,7 +8729,7 @@ void onConnectionEstablished() {
       }
     });
 
-    client.subscribe(holdPressStdStr.c_str(), [] (const String & payload)  {
+    subscribeCommandTopic(holdPressStdStr.c_str(), [] (const String & payload)  {
       if ((payload != NULL) && !(payload.isEmpty())) {
         printAString("holdPress MQTT Received...");
         if (!commandQueue.isFull()) {
@@ -8727,7 +8751,7 @@ void onConnectionEstablished() {
       }
     });
 
-    client.subscribe(rescanStdStr.c_str(), [] (const String & payload)  {
+    subscribeCommandTopic(rescanStdStr.c_str(), [] (const String & payload)  {
       if ((payload != NULL) && !(payload.isEmpty())) {
         printAString("Rescan MQTT Received...");
 
